@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 
 export async function DELETE(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
@@ -22,9 +22,11 @@ export async function DELETE(
         return new NextResponse('Forbidden', { status: 403 });
     }
 
+    const { id } = await context.params;
+
     await prisma.invitation.delete({
         where: {
-            id: params.id,
+            id,
             organizationId: session.user.activeOrgId,
         },
     });
