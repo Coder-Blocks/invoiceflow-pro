@@ -14,14 +14,12 @@ export async function GET(req: Request) {
     const dateFrom = searchParams.get('from');
     const dateTo = searchParams.get('to');
 
-    // Default date range: last 6 months
     const now = new Date();
     const sixMonthsAgo = new Date(now);
     sixMonthsAgo.setMonth(now.getMonth() - 6);
     const fromDate = dateFrom ? new Date(dateFrom) : sixMonthsAgo;
     const toDate = dateTo ? new Date(dateTo) : now;
 
-    // 1. Revenue Summary
     const paidInvoices = await prisma.invoice.findMany({
         where: {
             organizationId: orgId,
@@ -33,7 +31,6 @@ export async function GET(req: Request) {
 
     const totalRevenue = paidInvoices.reduce((sum, inv) => sum + inv.total, 0);
 
-    // 2. Outstanding Invoices
     const outstandingInvoices = await prisma.invoice.findMany({
         where: {
             organizationId: orgId,
@@ -54,7 +51,6 @@ export async function GET(req: Request) {
             return sum + (inv.total - paid);
         }, 0);
 
-    // 3. Paid This Month
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const paidThisMonth = await prisma.invoice.aggregate({
         where: {
@@ -65,37 +61,42 @@ export async function GET(req: Request) {
         _sum: { total: true },
     });
 
-    // 4. Customer Growth (by creation month)
     const customers = await prisma.customer.findMany({
         where: { organizationId: orgId, archived: false },
         select: { createdAt: true },
     });
-    const customerGrowth = aggregateByMonth(customers.map(c => c.createdAt), fromDate, toDate);
+    const customerGrowth = aggregateByMonth(
+        customers.map(c => ({ date: c.createdAt })),
+        fromDate,
+        toDate
+    );
 
-    // 5. Invoice Trends (monthly invoice totals)
     const invoices = await prisma.invoice.findMany({
         where: { organizationId: orgId, createdAt: { gte: fromDate, lte: toDate } },
         select: { total: true, createdAt: true, status: true },
     });
-    const invoiceTrends = aggregateByMonth(invoices.map(i => ({ date: i.createdAt, amount: i.total })), fromDate, toDate);
+    const invoiceTrends = aggregateByMonth(
+        invoices.map(i => ({ date: i.createdAt, amount: i.total })),
+        fromDate,
+        toDate
+    );
 
-    // 6. Payment Trends
     const payments = await prisma.payment.findMany({
         where: { organizationId: orgId, paymentDate: { gte: fromDate, lte: toDate } },
         select: { amount: true, paymentDate: true },
     });
-    const paymentTrends = aggregateByMonth(payments.map(p => ({ date: p.paymentDate, amount: p.amount })), fromDate, toDate);
+    const paymentTrends = aggregateByMonth(
+        payments.map(p => ({ date: p.paymentDate, amount: p.amount })),
+        fromDate,
+        toDate
+    );
 
-    // 7. Top Customers (including IDs)
     const topCustomers = await prisma.customer.findMany({
         where: { organizationId: orgId, archived: false },
         select: {
             id: true,
             name: true,
-            invoices: {
-                where: { status: 'PAID' },
-                select: { total: true },
-            },
+            invoices: { where: { status: 'PAID' }, select: { total: true } },
         },
         take: 10,
     });
@@ -105,7 +106,6 @@ export async function GET(req: Request) {
         revenue: c.invoices.reduce((sum, i) => sum + i.total, 0),
     })).sort((a, b) => b.revenue - a.revenue);
 
-    // 8. Aging Summary
     const aging = await calculateAging(orgId);
 
     return NextResponse.json({
@@ -121,7 +121,11 @@ export async function GET(req: Request) {
     });
 }
 
-function aggregateByMonth(data: { date: Date; amount?: number }[], from: Date, to: Date) {
+function aggregateByMonth(
+    data: { date: Date; amount?: number }[],
+    from: Date,
+    to: Date
+) {
     const months: Record<string, number> = {};
     const current = new Date(from);
     while (current <= to) {
