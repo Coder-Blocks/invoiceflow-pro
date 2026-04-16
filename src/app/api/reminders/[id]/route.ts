@@ -11,51 +11,22 @@ const updateSchema = z.object({
     isActive: z.boolean().optional(),
 });
 
-export async function PATCH(
-    req: Request,
-    { params }: { params: { id: string } }
-) {
+export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }) {
     const session = await auth();
-    if (!session?.user?.activeOrgId) {
-        return new NextResponse('Unauthorized', { status: 401 });
-    }
-
+    if (!session?.user?.activeOrgId) return new NextResponse('Unauthorized', { status: 401 });
     try {
+        const { id } = await context.params;
         const body = await req.json();
         const validated = updateSchema.parse(body);
-
-        const reminder = await prisma.reminder.update({
-            where: {
-                id: params.id,
-                organizationId: session.user.activeOrgId,
-            },
-            data: validated,
-        });
-
+        const reminder = await prisma.reminder.update({ where: { id, organizationId: session.user.activeOrgId }, data: validated });
         return NextResponse.json(reminder);
-    } catch (error) {
-        if (error instanceof z.ZodError) {
-            return new NextResponse(error.errors[0].message, { status: 400 });
-        }
-        return new NextResponse('Internal server error', { status: 500 });
-    }
+    } catch (error) { if (error instanceof z.ZodError) return new NextResponse(error.errors[0].message, { status: 400 }); return new NextResponse('Internal server error', { status: 500 }); }
 }
 
-export async function DELETE(
-    req: Request,
-    { params }: { params: { id: string } }
-) {
+export async function DELETE(req: Request, context: { params: Promise<{ id: string }> }) {
     const session = await auth();
-    if (!session?.user?.activeOrgId) {
-        return new NextResponse('Unauthorized', { status: 401 });
-    }
-
-    await prisma.reminder.delete({
-        where: {
-            id: params.id,
-            organizationId: session.user.activeOrgId,
-        },
-    });
-
+    if (!session?.user?.activeOrgId) return new NextResponse('Unauthorized', { status: 401 });
+    const { id } = await context.params;
+    await prisma.reminder.delete({ where: { id, organizationId: session.user.activeOrgId } });
     return new NextResponse(null, { status: 204 });
 }

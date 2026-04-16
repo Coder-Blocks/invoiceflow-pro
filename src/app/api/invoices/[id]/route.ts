@@ -14,100 +14,37 @@ const updateSchema = z.object({
     footer: z.string().optional().nullable(),
 });
 
-export async function GET(
-    req: Request,
-    context: { params: Promise<{ id: string }> }
-) {
+export async function GET(req: Request, context: { params: Promise<{ id: string }> }) {
     const session = await auth();
-    if (!session?.user?.activeOrgId) {
-        return new NextResponse('Unauthorized', { status: 401 });
-    }
-
+    if (!session?.user?.activeOrgId) return new NextResponse('Unauthorized', { status: 401 });
     const { id } = await context.params;
-
-    const invoice = await prisma.invoice.findUnique({
-        where: { id, organizationId: session.user.activeOrgId },
-        include: { customer: true, items: true, payments: true },
-    });
-
-    if (!invoice) {
-        return new NextResponse('Invoice not found', { status: 404 });
-    }
-
+    const invoice = await prisma.invoice.findUnique({ where: { id, organizationId: session.user.activeOrgId }, include: { customer: true, items: true, payments: true } });
+    if (!invoice) return new NextResponse('Invoice not found', { status: 404 });
     const paidAmount = invoice.payments.reduce((sum, p) => sum + p.amount, 0);
     const balanceDue = invoice.total - paidAmount;
-
     return NextResponse.json({ ...invoice, paidAmount, balanceDue });
 }
 
-export async function PATCH(
-    req: Request,
-    context: { params: Promise<{ id: string }> }
-) {
+export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }) {
     const session = await auth();
-    if (!session?.user?.activeOrgId) {
-        return new NextResponse('Unauthorized', { status: 401 });
-    }
-
+    if (!session?.user?.activeOrgId) return new NextResponse('Unauthorized', { status: 401 });
     try {
         const { id } = await context.params;
         const body = await req.json();
         const validated = updateSchema.parse(body);
-
-        const invoice = await prisma.invoice.update({
-            where: { id, organizationId: session.user.activeOrgId },
-            data: {
-                ...validated,
-                issueDate: validated.issueDate ? new Date(validated.issueDate) : undefined,
-                dueDate: validated.dueDate ? new Date(validated.dueDate) : undefined,
-                sentAt: validated.status === 'SENT' ? new Date() : undefined,
-            },
-        });
-
-        await prisma.auditLog.create({
-            data: {
-                userId: session.user.id,
-                organizationId: session.user.activeOrgId,
-                action: 'UPDATE',
-                entity: 'INVOICE',
-                entityId: invoice.id,
-                details: { changes: validated },
-            },
-        });
-
+        const invoice = await prisma.invoice.update({ where: { id, organizationId: session.user.activeOrgId }, data: { ...validated, issueDate: validated.issueDate ? new Date(validated.issueDate) : undefined, dueDate: validated.dueDate ? new Date(validated.dueDate) : undefined, sentAt: validated.status === 'SENT' ? new Date() : undefined } });
+        await prisma.auditLog.create({ data: { userId: session.user.id, organizationId: session.user.activeOrgId, action: 'UPDATE', entity: 'INVOICE', entityId: invoice.id, details: { changes: validated } } });
         return NextResponse.json(invoice);
-    } catch (error) {
-        if (error instanceof z.ZodError) {
-            return new NextResponse(error.errors[0].message, { status: 400 });
-        }
-        return new NextResponse('Internal server error', { status: 500 });
-    }
+    } catch (error) { if (error instanceof z.ZodError) return new NextResponse(error.errors[0].message, { status: 400 }); return new NextResponse('Internal server error', { status: 500 }); }
 }
 
-export async function DELETE(
-    req: Request,
-    context: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(req: Request, context: { params: Promise<{ id: string }> }) {
     const session = await auth();
-    if (!session?.user?.activeOrgId) {
-        return new NextResponse('Unauthorized', { status: 401 });
-    }
-
+    if (!session?.user?.activeOrgId) return new NextResponse('Unauthorized', { status: 401 });
     const { id } = await context.params;
-
-    const invoice = await prisma.invoice.findUnique({
-        where: { id, organizationId: session.user.activeOrgId },
-    });
-
-    if (!invoice) {
-        return new NextResponse('Invoice not found', { status: 404 });
-    }
-
-    if (invoice.status !== 'DRAFT') {
-        return new NextResponse('Only draft invoices can be deleted', { status: 400 });
-    }
-
+    const invoice = await prisma.invoice.findUnique({ where: { id, organizationId: session.user.activeOrgId } });
+    if (!invoice) return new NextResponse('Invoice not found', { status: 404 });
+    if (invoice.status !== 'DRAFT') return new NextResponse('Only draft invoices can be deleted', { status: 400 });
     await prisma.invoice.delete({ where: { id } });
-
     return new NextResponse(null, { status: 204 });
 }
