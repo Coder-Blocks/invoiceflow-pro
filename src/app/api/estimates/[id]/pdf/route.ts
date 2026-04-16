@@ -30,9 +30,9 @@ export async function GET(
         return new NextResponse('Estimate not found', { status: 404 });
     }
 
-    const pdfBuffer = await generateEstimatePDF(estimate);
+    const pdfData = await generateEstimatePDF(estimate);
 
-    return new NextResponse(pdfBuffer, {
+    return new NextResponse(pdfData, {
         headers: {
             'Content-Type': 'application/pdf',
             'Content-Disposition': `inline; filename="estimate-${estimate.estimateNumber}.pdf"`,

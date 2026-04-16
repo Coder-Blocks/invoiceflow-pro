@@ -30,9 +30,9 @@ export async function GET(
         return new NextResponse('Invoice not found', { status: 404 });
     }
 
-    const pdfBuffer = await generateInvoicePDF(invoice);
+    const pdfData = await generateInvoicePDF(invoice);
 
-    return new NextResponse(pdfBuffer, {
+    return new NextResponse(pdfData, {
         headers: {
             'Content-Type': 'application/pdf',
             'Content-Disposition': `inline; filename="invoice-${invoice.invoiceNumber}.pdf"`,

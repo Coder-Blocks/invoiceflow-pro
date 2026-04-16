@@ -3,7 +3,7 @@ import { formatCurrency, formatDate } from './utils';
 
 export async function generateInvoicePDF(
     invoice: Invoice & { customer: Customer | null; items: InvoiceItem[]; organization: Organization }
-): Promise<Buffer> {
+): Promise<Uint8Array> {
     const content = `
 INVOICE
 =======
@@ -27,12 +27,12 @@ Subtotal: ${formatCurrency(invoice.subtotal, invoice.currency)}
 Tax: ${formatCurrency(invoice.taxTotal, invoice.currency)}
 Total: ${formatCurrency(invoice.total, invoice.currency)}
 `;
-    return Buffer.from(content, 'utf-8');
+    return new TextEncoder().encode(content);
 }
 
 export async function generateEstimatePDF(
     estimate: Estimate & { customer: Customer | null; items: EstimateItem[]; organization: Organization }
-): Promise<Buffer> {
+): Promise<Uint8Array> {
     const content = `
 ESTIMATE
 ========
@@ -56,5 +56,5 @@ Subtotal: ${formatCurrency(estimate.subtotal, estimate.currency)}
 Tax: ${formatCurrency(estimate.taxTotal, estimate.currency)}
 Total: ${formatCurrency(estimate.total, estimate.currency)}
 `;
-    return Buffer.from(content, 'utf-8');
+    return new TextEncoder().encode(content);
 }
