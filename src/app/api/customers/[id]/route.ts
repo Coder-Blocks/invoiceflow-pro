@@ -14,27 +14,20 @@ const updateSchema = z.object({
 
 export async function GET(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
+    const { id } = await context.params;
+
     const customer = await prisma.customer.findUnique({
-        where: {
-            id: params.id,
-            organizationId: session.user.activeOrgId,
-        },
+        where: { id, organizationId: session.user.activeOrgId },
         include: {
-            invoices: {
-                orderBy: { createdAt: 'desc' },
-                take: 10,
-            },
-            payments: {
-                orderBy: { paymentDate: 'desc' },
-                take: 10,
-            },
+            invoices: { orderBy: { createdAt: 'desc' }, take: 10 },
+            payments: { orderBy: { paymentDate: 'desc' }, take: 10 },
             _count: { select: { invoices: true } },
         },
     });
@@ -43,32 +36,22 @@ export async function GET(
         return new NextResponse('Customer not found', { status: 404 });
     }
 
-    // Calculate outstanding balance
     const invoicesTotal = await prisma.invoice.aggregate({
-        where: {
-            customerId: params.id,
-            organizationId: session.user.activeOrgId,
-        },
+        where: { customerId: id, organizationId: session.user.activeOrgId },
         _sum: { total: true },
     });
-
     const paymentsTotal = await prisma.payment.aggregate({
-        where: {
-            customerId: params.id,
-            organizationId: session.user.activeOrgId,
-        },
+        where: { customerId: id, organizationId: session.user.activeOrgId },
         _sum: { amount: true },
     });
-
-    const outstanding =
-        (invoicesTotal._sum.total || 0) - (paymentsTotal._sum.amount || 0);
+    const outstanding = (invoicesTotal._sum.total || 0) - (paymentsTotal._sum.amount || 0);
 
     return NextResponse.json({ ...customer, outstanding });
 }
 
 export async function PATCH(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
@@ -76,14 +59,12 @@ export async function PATCH(
     }
 
     try {
+        const { id } = await context.params;
         const body = await req.json();
         const validated = updateSchema.parse(body);
 
         const customer = await prisma.customer.update({
-            where: {
-                id: params.id,
-                organizationId: session.user.activeOrgId,
-            },
+            where: { id, organizationId: session.user.activeOrgId },
             data: validated,
         });
 
@@ -98,19 +79,17 @@ export async function PATCH(
 
 export async function DELETE(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    // Soft delete: archive customer
+    const { id } = await context.params;
+
     await prisma.customer.update({
-        where: {
-            id: params.id,
-            organizationId: session.user.activeOrgId,
-        },
+        where: { id, organizationId: session.user.activeOrgId },
         data: { archived: true },
     });
 

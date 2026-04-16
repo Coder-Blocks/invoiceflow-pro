@@ -16,30 +16,24 @@ const updateSchema = z.object({
 
 export async function GET(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
+    const { id } = await context.params;
+
     const invoice = await prisma.invoice.findUnique({
-        where: {
-            id: params.id,
-            organizationId: session.user.activeOrgId,
-        },
-        include: {
-            customer: true,
-            items: true,
-            payments: true,
-        },
+        where: { id, organizationId: session.user.activeOrgId },
+        include: { customer: true, items: true, payments: true },
     });
 
     if (!invoice) {
         return new NextResponse('Invoice not found', { status: 404 });
     }
 
-    // Calculate amount paid
     const paidAmount = invoice.payments.reduce((sum, p) => sum + p.amount, 0);
     const balanceDue = invoice.total - paidAmount;
 
@@ -48,7 +42,7 @@ export async function GET(
 
 export async function PATCH(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
@@ -56,18 +50,17 @@ export async function PATCH(
     }
 
     try {
+        const { id } = await context.params;
         const body = await req.json();
         const validated = updateSchema.parse(body);
 
         const invoice = await prisma.invoice.update({
-            where: {
-                id: params.id,
-                organizationId: session.user.activeOrgId,
-            },
+            where: { id, organizationId: session.user.activeOrgId },
             data: {
                 ...validated,
                 issueDate: validated.issueDate ? new Date(validated.issueDate) : undefined,
                 dueDate: validated.dueDate ? new Date(validated.dueDate) : undefined,
+                sentAt: validated.status === 'SENT' ? new Date() : undefined,
             },
         });
 
@@ -93,19 +86,17 @@ export async function PATCH(
 
 export async function DELETE(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    // Only allow deletion of draft invoices
+    const { id } = await context.params;
+
     const invoice = await prisma.invoice.findUnique({
-        where: {
-            id: params.id,
-            organizationId: session.user.activeOrgId,
-        },
+        where: { id, organizationId: session.user.activeOrgId },
     });
 
     if (!invoice) {
@@ -116,9 +107,7 @@ export async function DELETE(
         return new NextResponse('Only draft invoices can be deleted', { status: 400 });
     }
 
-    await prisma.invoice.delete({
-        where: { id: params.id },
-    });
+    await prisma.invoice.delete({ where: { id } });
 
     return new NextResponse(null, { status: 204 });
 }

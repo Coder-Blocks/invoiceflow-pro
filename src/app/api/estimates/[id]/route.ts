@@ -15,23 +15,18 @@ const updateSchema = z.object({
 
 export async function GET(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
+    const { id } = await context.params;
+
     const estimate = await prisma.estimate.findUnique({
-        where: {
-            id: params.id,
-            organizationId: session.user.activeOrgId,
-        },
-        include: {
-            customer: true,
-            items: true,
-            organization: true,
-        },
+        where: { id, organizationId: session.user.activeOrgId },
+        include: { customer: true, items: true, organization: true },
     });
 
     if (!estimate) {
@@ -43,7 +38,7 @@ export async function GET(
 
 export async function PATCH(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
@@ -51,14 +46,12 @@ export async function PATCH(
     }
 
     try {
+        const { id } = await context.params;
         const body = await req.json();
         const validated = updateSchema.parse(body);
 
         const estimate = await prisma.estimate.update({
-            where: {
-                id: params.id,
-                organizationId: session.user.activeOrgId,
-            },
+            where: { id, organizationId: session.user.activeOrgId },
             data: {
                 ...validated,
                 issueDate: validated.issueDate ? new Date(validated.issueDate) : undefined,
@@ -91,18 +84,17 @@ export async function PATCH(
 
 export async function DELETE(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
+    const { id } = await context.params;
+
     const estimate = await prisma.estimate.findUnique({
-        where: {
-            id: params.id,
-            organizationId: session.user.activeOrgId,
-        },
+        where: { id, organizationId: session.user.activeOrgId },
     });
 
     if (!estimate) {
@@ -113,9 +105,7 @@ export async function DELETE(
         return new NextResponse('Only draft estimates can be deleted', { status: 400 });
     }
 
-    await prisma.estimate.delete({
-        where: { id: params.id },
-    });
+    await prisma.estimate.delete({ where: { id } });
 
     return new NextResponse(null, { status: 204 });
 }
