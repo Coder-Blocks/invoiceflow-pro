@@ -3,79 +3,111 @@ import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-const customerSchema = z.object({
-    name: z.string().min(1, 'Name is required'),
-    email: z.string().email().optional().nullable(),
-    phone: z.string().optional().nullable(),
-    billingAddress: z.any().optional(),
-    taxId: z.string().optional().nullable(),
+const updateSchema = z.object({
+    customerId: z.string().optional().nullable(),
+    poNumber: z.string().optional().nullable(),
+    issueDate: z.string().datetime().optional(),
+    dueDate: z.string().datetime().optional(),
+    status: z.enum(['DRAFT', 'SENT', 'VIEWED', 'PARTIAL_PAID', 'PAID', 'OVERDUE', 'CANCELLED']).optional(),
     notes: z.string().optional().nullable(),
+    terms: z.string().optional().nullable(),
+    footer: z.string().optional().nullable(),
 });
 
-export async function GET(req: Request) {
+export async function GET(
+    req: Request,
+    context: { params: Promise<{ id: string }> }
+) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const { searchParams } = new URL(req.url);
-    const search = searchParams.get('search') || '';
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '10');
-    const skip = (page - 1) * limit;
+    const { id } = await context.params;
 
-    const where = {
-        organizationId: session.user.activeOrgId,
-        archived: false,
-        OR: search
-            ? [
-                { name: { contains: search, mode: 'insensitive' as const } },
-                { email: { contains: search, mode: 'insensitive' as const } },
-            ]
-            : undefined,
-    };
-
-    const [customers, total] = await Promise.all([
-        prisma.customer.findMany({
-            where,
-            orderBy: { createdAt: 'desc' },
-            skip,
-            take: limit,
-            include: {
-                _count: { select: { invoices: true } },
-            },
-        }),
-        prisma.customer.count({ where }),
-    ]);
-
-    return NextResponse.json({
-        customers,
-        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    const invoice = await prisma.invoice.findUnique({
+        where: { id, organizationId: session.user.activeOrgId },
+        include: { customer: true, items: true, payments: true },
     });
+
+    if (!invoice) {
+        return new NextResponse('Invoice not found', { status: 404 });
+    }
+
+    const paidAmount = invoice.payments.reduce((sum, p) => sum + p.amount, 0);
+    const balanceDue = invoice.total - paidAmount;
+
+    return NextResponse.json({ ...invoice, paidAmount, balanceDue });
 }
 
-export async function POST(req: Request) {
+export async function PATCH(
+    req: Request,
+    context: { params: Promise<{ id: string }> }
+) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
     try {
+        const { id } = await context.params;
         const body = await req.json();
-        const validated = customerSchema.parse(body);
+        const validated = updateSchema.parse(body);
 
-        const customer = await prisma.customer.create({
+        const invoice = await prisma.invoice.update({
+            where: { id, organizationId: session.user.activeOrgId },
             data: {
                 ...validated,
-                organizationId: session.user.activeOrgId,
+                issueDate: validated.issueDate ? new Date(validated.issueDate) : undefined,
+                dueDate: validated.dueDate ? new Date(validated.dueDate) : undefined,
+                sentAt: validated.status === 'SENT' ? new Date() : undefined,
             },
         });
 
-        return NextResponse.json(customer);
+        await prisma.auditLog.create({
+            data: {
+                userId: session.user.id,
+                organizationId: session.user.activeOrgId,
+                action: 'UPDATE',
+                entity: 'INVOICE',
+                entityId: invoice.id,
+                details: { changes: validated },
+            },
+        });
+
+        return NextResponse.json(invoice);
     } catch (error) {
         if (error instanceof z.ZodError) {
             return new NextResponse(error.errors[0].message, { status: 400 });
         }
         return new NextResponse('Internal server error', { status: 500 });
     }
+}
+
+export async function DELETE(
+    req: Request,
+    context: { params: Promise<{ id: string }> }
+) {
+    const session = await auth();
+    if (!session?.user?.activeOrgId) {
+        return new NextResponse('Unauthorized', { status: 401 });
+    }
+
+    const { id } = await context.params;
+
+    const invoice = await prisma.invoice.findUnique({
+        where: { id, organizationId: session.user.activeOrgId },
+    });
+
+    if (!invoice) {
+        return new NextResponse('Invoice not found', { status: 404 });
+    }
+
+    if (invoice.status !== 'DRAFT') {
+        return new NextResponse('Only draft invoices can be deleted', { status: 400 });
+    }
+
+    await prisma.invoice.delete({ where: { id } });
+
+    return new NextResponse(null, { status: 204 });
 }
