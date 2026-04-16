@@ -39,8 +39,6 @@ const navItems = [
     { name: 'Audit Logs', href: '/dashboard/audit-logs', icon: Shield },
     { name: 'Billing', href: '/dashboard/billing', icon: Wallet },
     { name: 'Settings', href: '/dashboard/settings', icon: Settings },
-    { name: 'Analytics', href: '/analytics', icon: BarChart3 },
-    { name: 'Billing', href: '/billing', icon: Wallet },
 ];
 
 export function DashboardSidebar() {
