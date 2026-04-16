@@ -5,16 +5,18 @@ import { generateEstimatePDF } from '@/lib/pdf-generator';
 
 export async function GET(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
+    const { id } = await context.params;
+
     const estimate = await prisma.estimate.findUnique({
         where: {
-            id: params.id,
+            id,
             organizationId: session.user.activeOrgId,
         },
         include: {
