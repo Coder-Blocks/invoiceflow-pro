@@ -4,16 +4,18 @@ import { NextResponse } from 'next/server';
 
 export async function DELETE(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
+    const { id } = await context.params;
+
     await prisma.bankTransaction.delete({
         where: {
-            id: params.id,
+            id,
             organizationId: session.user.activeOrgId,
         },
     });
