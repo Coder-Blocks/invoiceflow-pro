@@ -25,8 +25,15 @@ export async function GET(
     const { id } = await context.params;
 
     const estimate = await prisma.estimate.findUnique({
-        where: { id, organizationId: session.user.activeOrgId },
-        include: { customer: true, items: true, organization: true },
+        where: {
+            id,
+            organizationId: session.user.activeOrgId,
+        },
+        include: {
+            customer: true,
+            items: true,
+            organization: true,
+        },
     });
 
     if (!estimate) {
