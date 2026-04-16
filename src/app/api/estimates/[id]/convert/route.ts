@@ -4,16 +4,18 @@ import { NextResponse } from 'next/server';
 
 export async function POST(
     req: Request,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     const session = await auth();
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
+    const { id } = await context.params;
+
     const estimate = await prisma.estimate.findUnique({
         where: {
-            id: params.id,
+            id,
             organizationId: session.user.activeOrgId,
         },
         include: {
@@ -31,7 +33,6 @@ export async function POST(
         return new NextResponse('Estimate already converted', { status: 400 });
     }
 
-    // Generate invoice number
     const org = estimate.organization;
     const prefix = org?.invoicePrefix || 'INV';
     const year = new Date().getFullYear();
@@ -40,7 +41,6 @@ export async function POST(
     });
     const invoiceNumber = `${prefix}-${year}${String(count + 1).padStart(4, '0')}`;
 
-    // Create invoice from estimate data
     const invoice = await prisma.invoice.create({
         data: {
             organizationId: session.user.activeOrgId,
@@ -48,7 +48,7 @@ export async function POST(
             invoiceNumber,
             poNumber: null,
             issueDate: new Date(),
-            dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Default 30 days
+            dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             currency: estimate.currency,
             status: 'DRAFT',
             subtotal: estimate.subtotal,
@@ -71,9 +71,8 @@ export async function POST(
         },
     });
 
-    // Update estimate with conversion info
     await prisma.estimate.update({
-        where: { id: params.id },
+        where: { id },
         data: {
             status: 'CONVERTED',
             convertedAt: new Date(),
