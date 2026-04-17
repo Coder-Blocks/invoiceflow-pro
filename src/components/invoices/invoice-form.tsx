@@ -170,6 +170,7 @@ export function InvoiceForm({ initialData, customers }: InvoiceFormProps) {
                                     <FormLabel>Customer</FormLabel>
                                     <Select
                                         onValueChange={field.onChange}
+                                        value={field.value}
                                         defaultValue={field.value}
                                     >
                                         <FormControl>
@@ -239,7 +240,7 @@ export function InvoiceForm({ initialData, customers }: InvoiceFormProps) {
                     render={({ field }) => (
                         <FormItem>
                             <FormLabel>Currency</FormLabel>
-                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <Select onValueChange={field.onChange} value={field.value}>
                                 <FormControl>
                                     <SelectTrigger className="w-[180px]">
                                         <SelectValue />
