@@ -1,13 +1,6 @@
 'use client';
 
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { formatDate } from '@/lib/utils';
 
@@ -24,6 +17,17 @@ export function AuditLogsTable({ logs }: { logs: any[] }) {
             SUBSCRIPTION_CREATED: 'success',
         };
         return variants[action] || 'secondary';
+    };
+
+    const formatDetails = (details: any) => {
+        if (!details) return '—';
+        if (typeof details === 'string') return details;
+        if (details.changes) {
+            return Object.entries(details.changes)
+                .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+                .join(', ');
+        }
+        return JSON.stringify(details);
     };
 
     return (
@@ -47,16 +51,14 @@ export function AuditLogsTable({ logs }: { logs: any[] }) {
                 ) : (
                     logs.map((log) => (
                         <TableRow key={log.id}>
-                            <TableCell className="whitespace-nowrap">
-                                {formatDate(log.createdAt)}
-                            </TableCell>
+                            <TableCell className="whitespace-nowrap">{formatDate(log.createdAt)}</TableCell>
                             <TableCell>{log.user?.name || log.user?.email || 'System'}</TableCell>
                             <TableCell>
                                 <Badge variant={getActionBadge(log.action) as any}>{log.action}</Badge>
                             </TableCell>
                             <TableCell>{log.entity}</TableCell>
                             <TableCell className="max-w-xs truncate">
-                                {log.details ? JSON.stringify(log.details) : '—'}
+                                {formatDetails(log.details)}
                             </TableCell>
                         </TableRow>
                     ))

@@ -11,27 +11,13 @@ export async function GET(
     if (!session?.user?.activeOrgId) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
-
     const { id } = await context.params;
-
     const invoice = await prisma.invoice.findUnique({
-        where: {
-            id,
-            organizationId: session.user.activeOrgId,
-        },
-        include: {
-            customer: true,
-            items: true,
-            organization: true,
-        },
+        where: { id, organizationId: session.user.activeOrgId },
+        include: { customer: true, items: true, organization: true },
     });
-
-    if (!invoice) {
-        return new NextResponse('Invoice not found', { status: 404 });
-    }
-
+    if (!invoice) return new NextResponse('Invoice not found', { status: 404 });
     const pdfData = await generateInvoicePDF(invoice);
-
     return new NextResponse(pdfData as unknown as BodyInit, {
         headers: {
             'Content-Type': 'application/pdf',
