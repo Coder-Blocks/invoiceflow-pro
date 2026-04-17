@@ -5,23 +5,10 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Button } from '@/components/ui/button';
-import {
-    Form,
-    FormControl,
-    FormField,
-    FormItem,
-    FormLabel,
-    FormMessage,
-} from '@/components/ui/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { formatCurrency } from '@/lib/utils';
@@ -68,9 +55,7 @@ export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps)
         setSelectedInvoice(inv);
         if (inv) {
             const balanceDue = inv.total - (inv.payments?.reduce((s: number, p: any) => s + p.amount, 0) || 0);
-            if (balanceDue > 0) {
-                form.setValue('amount', balanceDue);
-            }
+            if (balanceDue > 0) form.setValue('amount', balanceDue);
             form.setValue('customerId', inv.customerId);
         } else {
             form.setValue('amount', 0);
@@ -80,23 +65,11 @@ export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps)
 
     const onSubmit = async (data: PaymentFormValues) => {
         setIsLoading(true);
-        // Convert "NONE" back to undefined for API
-        const payload = {
-            ...data,
-            invoiceId: data.invoiceId === 'NONE' ? undefined : data.invoiceId,
-        };
-        const res = await fetch('/api/payments', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
+        const payload = { ...data, invoiceId: data.invoiceId === 'NONE' ? undefined : data.invoiceId };
+        const res = await fetch('/api/payments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         if (res.ok) {
             toast.success('Payment recorded');
-            if (payload.invoiceId) {
-                router.push(`/dashboard/invoices/${payload.invoiceId}`);
-            } else {
-                router.push('/dashboard/payments');
-            }
+            router.push(payload.invoiceId ? `/dashboard/invoices/${payload.invoiceId}` : '/dashboard/payments');
             router.refresh();
         } else {
             const error = await res.text();
@@ -117,11 +90,7 @@ export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps)
                         <FormItem>
                             <FormLabel>Invoice (Optional)</FormLabel>
                             <Select onValueChange={field.onChange} value={field.value}>
-                                <FormControl>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select an invoice" />
-                                    </SelectTrigger>
-                                </FormControl>
+                                <FormControl><SelectTrigger><SelectValue placeholder="Select an invoice" /></SelectTrigger></FormControl>
                                 <SelectContent>
                                     <SelectItem value="NONE">No invoice (direct payment)</SelectItem>
                                     {invoices.map((inv: any) => {
@@ -148,16 +117,8 @@ export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps)
                             <FormItem>
                                 <FormLabel>Customer</FormLabel>
                                 <Select onValueChange={field.onChange} value={field.value}>
-                                    <FormControl>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Select a customer" />
-                                        </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                        {customers.map((cust: any) => (
-                                            <SelectItem key={cust.id} value={cust.id}>{cust.name}</SelectItem>
-                                        ))}
-                                    </SelectContent>
+                                    <FormControl><SelectTrigger><SelectValue placeholder="Select a customer" /></SelectTrigger></FormControl>
+                                    <SelectContent>{customers.map((cust: any) => (<SelectItem key={cust.id} value={cust.id}>{cust.name}</SelectItem>))}</SelectContent>
                                 </Select>
                                 <FormMessage />
                             </FormItem>
@@ -166,95 +127,20 @@ export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps)
                 )}
 
                 <div className="grid grid-cols-2 gap-4">
-                    <FormField
-                        control={form.control}
-                        name="amount"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>Amount</FormLabel>
-                                <FormControl>
-                                    <Input type="number" step="0.01" min="0.01" {...field} />
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="paymentDate"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>Payment Date</FormLabel>
-                                <FormControl>
-                                    <Input type="date" {...field} />
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
+                    <FormField control={form.control} name="amount" render={({ field }) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" step="0.01" min="0.01" {...field} /></FormControl><FormMessage /></FormItem>)} />
+                    <FormField control={form.control} name="paymentDate" render={({ field }) => (<FormItem><FormLabel>Payment Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>)} />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                    <FormField
-                        control={form.control}
-                        name="paymentMethod"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>Payment Method</FormLabel>
-                                <Select onValueChange={field.onChange} value={field.value}>
-                                    <FormControl>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Select method" />
-                                        </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                        <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-                                        <SelectItem value="Credit Card">Credit Card</SelectItem>
-                                        <SelectItem value="Cash">Cash</SelectItem>
-                                        <SelectItem value="Check">Check</SelectItem>
-                                        <SelectItem value="Other">Other</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="reference"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>Reference (Optional)</FormLabel>
-                                <FormControl>
-                                    <Input placeholder="Check #, Transaction ID" {...field} />
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
+                    <FormField control={form.control} name="paymentMethod" render={({ field }) => (<FormItem><FormLabel>Payment Method</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select method" /></SelectTrigger></FormControl><SelectContent><SelectItem value="Bank Transfer">Bank Transfer</SelectItem><SelectItem value="Credit Card">Credit Card</SelectItem><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Check">Check</SelectItem><SelectItem value="Other">Other</SelectItem></SelectContent></Select><FormMessage /></FormItem>)} />
+                    <FormField control={form.control} name="reference" render={({ field }) => (<FormItem><FormLabel>Reference (Optional)</FormLabel><FormControl><Input placeholder="Check #, Transaction ID" {...field} /></FormControl><FormMessage /></FormItem>)} />
                 </div>
 
-                <FormField
-                    control={form.control}
-                    name="notes"
-                    render={({ field }) => (
-                        <FormItem>
-                            <FormLabel>Notes</FormLabel>
-                            <FormControl>
-                                <Textarea placeholder="Additional notes..." {...field} />
-                            </FormControl>
-                            <FormMessage />
-                        </FormItem>
-                    )}
-                />
+                <FormField control={form.control} name="notes" render={({ field }) => (<FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="Additional notes..." {...field} /></FormControl><FormMessage /></FormItem>)} />
 
                 <div className="flex justify-end gap-2">
-                    <Button type="button" variant="outline" onClick={() => router.back()}>
-                        Cancel
-                    </Button>
-                    <Button type="submit" disabled={isLoading}>
-                        Record Payment
-                    </Button>
+                    <Button type="button" variant="outline" onClick={() => router.back()}>Cancel</Button>
+                    <Button type="submit" disabled={isLoading}>Record Payment</Button>
                 </div>
             </form>
         </Form>
