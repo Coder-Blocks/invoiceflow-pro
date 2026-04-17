@@ -81,7 +81,11 @@ export async function POST(req: Request) {
 
     try {
         const body = await req.json();
-        const validated = invoiceSchema.parse(body);
+        const validated = invoiceSchema.parse({
+            ...body,
+            issueDate: new Date(body.issueDate).toISOString(),
+            dueDate: new Date(body.dueDate).toISOString(),
+        });
 
         // Generate invoice number (e.g., INV-20240001)
         const org = await prisma.organization.findUnique({
