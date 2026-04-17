@@ -1,7 +1,11 @@
 import { auth } from '@/lib/auth';
 import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase';
-import { randomBytes } from 'crypto';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 export async function POST(req: Request) {
     const session = await auth();
@@ -12,44 +16,29 @@ export async function POST(req: Request) {
     try {
         const formData = await req.formData();
         const file = formData.get('file') as File;
-        if (!file) {
-            return new NextResponse('No file uploaded', { status: 400 });
+        if (!file) return new NextResponse('No file uploaded', { status: 400 });
+        if (!file.type.startsWith('image/')) return new NextResponse('Only image files are allowed', { status: 400 });
+        if (file.size > 2 * 1024 * 1024) return new NextResponse('File size exceeds 2MB limit', { status: 400 });
+
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const timestamp = Date.now();
+        const randomString = Math.random().toString(36).substring(2, 15);
+        const fileExtension = file.name.split('.').pop();
+        const filePath = `${timestamp}-${randomString}.${fileExtension}`;
+
+        const { data, error } = await supabase.storage
+            .from('uploads')
+            .upload(filePath, buffer, { contentType: file.type, upsert: false });
+
+        if (error) {
+            console.error('Supabase upload error:', error);
+            return new NextResponse(error.message, { status: 500 });
         }
 
-        if (!file.type.startsWith('image/')) {
-            return new NextResponse('Only image files are allowed', { status: 400 });
-        }
-
-        if (file.size > 2 * 1024 * 1024) {
-            return new NextResponse('File size exceeds 2MB limit', { status: 400 });
-        }
-
-        const bytes = await file.arrayBuffer();
-        const buffer = Buffer.from(bytes);
-
-        const ext = file.name.split('.').pop() || 'png';
-        const filename = `${randomBytes(16).toString('hex')}.${ext}`;
-        const filePath = `${session.user.activeOrgId}/${filename}`;
-
-        const { error } = await supabaseAdmin.storage
-            .from('organization-logos')
-            .upload(filePath, buffer, {
-                contentType: file.type,
-                upsert: false,
-            });
-
-        if (error) throw error;
-
-        const { data: publicUrlData } = supabaseAdmin.storage
-            .from('organization-logos')
-            .getPublicUrl(filePath);
-
-        return NextResponse.json({ url: publicUrlData.publicUrl });
+        const { data: urlData } = supabase.storage.from('uploads').getPublicUrl(data.path);
+        return NextResponse.json({ url: urlData.publicUrl });
     } catch (error) {
         console.error('Upload error:', error);
-        return new NextResponse(
-            error instanceof Error ? error.message : 'Upload failed',
-            { status: 500 }
-        );
+        return new NextResponse(error instanceof Error ? error.message : 'Upload failed', { status: 500 });
     }
 }
