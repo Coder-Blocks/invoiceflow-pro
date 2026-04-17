@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { formatCurrency } from '@/lib/utils';
+import { Suspense } from 'react';
 
 const paymentSchema = z.object({
     invoiceId: z.string().optional(),
@@ -30,7 +30,7 @@ interface PaymentFormProps {
     customers?: any[];
 }
 
-export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps) {
+function PaymentFormInner({ invoices = [], customers = [] }: PaymentFormProps) {
     const router = useRouter();
     const searchParams = useSearchParams();
     const invoiceIdParam = searchParams.get('invoiceId');
@@ -48,9 +48,6 @@ export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps)
             notes: '',
         },
     });
-
-    // 自动填充逻辑保持不变
-    // ...
 
     const onSubmit = async (data: PaymentFormValues) => {
         setIsLoading(true);
@@ -76,5 +73,164 @@ export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps)
         }
     };
 
-    // JSX 保持不变
+    return (
+        <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-2xl">
+                <FormField
+                    control={form.control}
+                    name="invoiceId"
+                    render={({ field }) => (
+                        <FormItem>
+                            <FormLabel>Invoice (optional)</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                <FormControl>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Select an invoice" />
+                                    </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                    <SelectItem value="NONE">No invoice</SelectItem>
+                                    {invoices.map((inv: any) => (
+                                        <SelectItem key={inv.id} value={inv.id}>
+                                            {inv.invoiceNumber} — {inv.customer?.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <FormMessage />
+                        </FormItem>
+                    )}
+                />
+
+                <FormField
+                    control={form.control}
+                    name="customerId"
+                    render={({ field }) => (
+                        <FormItem>
+                            <FormLabel>Customer (optional)</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                <FormControl>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Select a customer" />
+                                    </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                    <SelectItem value="">No customer</SelectItem>
+                                    {customers.map((c: any) => (
+                                        <SelectItem key={c.id} value={c.id}>
+                                            {c.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <FormMessage />
+                        </FormItem>
+                    )}
+                />
+
+                <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                        control={form.control}
+                        name="amount"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Amount *</FormLabel>
+                                <FormControl>
+                                    <Input type="number" step="0.01" placeholder="0.00" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+
+                    <FormField
+                        control={form.control}
+                        name="paymentDate"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Payment Date *</FormLabel>
+                                <FormControl>
+                                    <Input type="date" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                        control={form.control}
+                        name="paymentMethod"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Payment Method</FormLabel>
+                                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                    <FormControl>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select method" />
+                                        </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                        <SelectItem value="BANK_TRANSFER">Bank Transfer</SelectItem>
+                                        <SelectItem value="CASH">Cash</SelectItem>
+                                        <SelectItem value="CREDIT_CARD">Credit Card</SelectItem>
+                                        <SelectItem value="UPI">UPI</SelectItem>
+                                        <SelectItem value="CHEQUE">Cheque</SelectItem>
+                                        <SelectItem value="OTHER">Other</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+
+                    <FormField
+                        control={form.control}
+                        name="reference"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Reference / Transaction ID</FormLabel>
+                                <FormControl>
+                                    <Input placeholder="UTR123456..." {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                </div>
+
+                <FormField
+                    control={form.control}
+                    name="notes"
+                    render={({ field }) => (
+                        <FormItem>
+                            <FormLabel>Notes</FormLabel>
+                            <FormControl>
+                                <Textarea placeholder="Optional notes..." {...field} />
+                            </FormControl>
+                            <FormMessage />
+                        </FormItem>
+                    )}
+                />
+
+                <div className="flex gap-2 justify-end">
+                    <Button type="button" variant="outline" onClick={() => router.back()}>
+                        Cancel
+                    </Button>
+                    <Button type="submit" disabled={isLoading}>
+                        {isLoading ? 'Saving...' : 'Record Payment'}
+                    </Button>
+                </div>
+            </form>
+        </Form>
+    );
+}
+
+export function PaymentForm(props: PaymentFormProps) {
+    return (
+        <Suspense fallback={<div className="p-4 text-muted-foreground">Loading form...</div>}>
+            <PaymentFormInner {...props} />
+        </Suspense>
+    );
 }
