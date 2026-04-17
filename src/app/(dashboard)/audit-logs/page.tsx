@@ -2,11 +2,19 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { notFound, redirect } from 'next/navigation';
 import { AuditLogsTable } from '@/components/audit/audit-logs-table';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+    Card,
+    CardContent,
+    CardHeader,
+    CardTitle,
+} from '@/components/ui/card';
 
 export default async function AuditLogsPage() {
     const session = await auth();
-    if (!session?.user?.activeOrgId) return notFound();
+
+    if (!session?.user?.activeOrgId || !session.user?.id) {
+        return notFound();
+    }
 
     const membership = await prisma.organizationMember.findFirst({
         where: {
@@ -19,18 +27,43 @@ export default async function AuditLogsPage() {
         redirect('/dashboard');
     }
 
-    const logs = await prisma.auditLog.findMany({
-        where: { organizationId: session.user.activeOrgId },
-        include: { user: { select: { name: true, email: true } } },
-        orderBy: { createdAt: 'desc' },
+    const rawLogs = await prisma.auditLog.findMany({
+        where: {
+            organizationId: session.user.activeOrgId,
+        },
+        include: {
+            user: {
+                select: {
+                    name: true,
+                    email: true,
+                },
+            },
+        },
+        orderBy: {
+            createdAt: 'desc',
+        },
         take: 100,
     });
+
+    const logs = rawLogs.map((log) => ({
+        ...log,
+        action: log.action ?? '—',
+        entity: log.entity ?? '—',
+        user: log.user
+            ? {
+                name: log.user.name ?? null,
+                email: log.user.email ?? null,
+            }
+            : null,
+    }));
 
     return (
         <div className="space-y-6">
             <div>
                 <h1 className="text-3xl font-bold tracking-tight">Audit Logs</h1>
-                <p className="text-muted-foreground">Track all important actions in your organization.</p>
+                <p className="text-muted-foreground">
+                    Track all important actions in your organization.
+                </p>
             </div>
 
             <Card>
