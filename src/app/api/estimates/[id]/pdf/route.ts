@@ -32,7 +32,7 @@ export async function GET(
 
     const pdfData = await generateEstimatePDF(estimate);
 
-    return new NextResponse(pdfData, {
+    return new NextResponse(pdfData as unknown as BodyInit, {
         headers: {
             'Content-Type': 'application/pdf',
             'Content-Disposition': `inline; filename="estimate-${estimate.estimateNumber}.pdf"`,

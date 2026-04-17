@@ -6,7 +6,7 @@ import Stripe from 'stripe';
 
 export async function POST(req: Request) {
     const body = await req.text();
-    const signature = headers().get('stripe-signature')!;
+    const signature = (await headers()).get('stripe-signature')!;
 
     let event: Stripe.Event;
 
@@ -54,7 +54,7 @@ export async function POST(req: Request) {
             }
 
             case 'invoice.payment_succeeded': {
-                const invoice = event.data.object as Stripe.Invoice;
+                const invoice = event.data.object as any;
                 const subscriptionId = invoice.subscription as string;
                 if (subscriptionId) {
                     const subscription = await prisma.subscription.findFirst({

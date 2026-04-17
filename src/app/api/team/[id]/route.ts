@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-const updateSchema = z.object({ role: z.enum(['ADMIN', 'ACCOUNTANT', 'STAFF']) });
+const updateSchema = z.object({ role: z.enum(['OWNER', 'ADMIN', 'ACCOUNTANT', 'STAFF']) });
 
 export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }) {
     const session = await auth();

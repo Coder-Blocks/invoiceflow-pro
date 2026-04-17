@@ -95,13 +95,14 @@ export async function POST(req: Request) {
             }
 
             // Create subscription
-            const razorpaySubscription = await razorpay.subscriptions.create({
+            const subscriptionPayload: any = {
                 plan_id: PLANS[plan].razorpayPlanId,
                 customer_id: razorpayCustomerId,
                 total_count: 12, // 12 billing cycles (months)
                 quantity: 1,
                 notes: { organizationId: orgId, plan },
-            });
+            };
+            const razorpaySubscription = await razorpay.subscriptions.create(subscriptionPayload);
 
             // Save subscription ID
             await prisma.subscription.update({

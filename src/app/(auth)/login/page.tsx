@@ -19,7 +19,7 @@ const loginSchema = z.object({
 
 type LoginForm = z.infer<typeof loginSchema>;
 
-export default function LoginPage() {
+function LoginFormContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
@@ -121,5 +121,15 @@ export default function LoginPage() {
                 </Link>
             </p>
         </>
+    );
+}
+
+import { Suspense } from 'react';
+
+export default function LoginPage() {
+    return (
+        <Suspense fallback={<div className="flex justify-center p-8">Loading...</div>}>
+            <LoginFormContent />
+        </Suspense>
     );
 }

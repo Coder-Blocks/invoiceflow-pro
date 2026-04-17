@@ -49,9 +49,12 @@ export async function enforceSubscriptionLimit(entity: 'customers' | 'invoices')
     const limit = features[`max${entity.charAt(0).toUpperCase() + entity.slice(1)}`];
     if (!limit) return; // No limit
 
-    const count = await prisma[entity].count({
-        where: { organizationId: subscription.organizationId },
-    });
+    let count = 0;
+    if (entity === 'customers') {
+        count = await prisma.customer.count({ where: { organizationId: subscription.organizationId } });
+    } else {
+        count = await prisma.invoice.count({ where: { organizationId: subscription.organizationId } });
+    }
 
     if (count >= limit) {
         throw new Error(`You have reached the ${entity} limit for your plan. Please upgrade.`);

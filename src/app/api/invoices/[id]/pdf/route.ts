@@ -32,7 +32,7 @@ export async function GET(
 
     const pdfData = await generateInvoicePDF(invoice);
 
-    return new NextResponse(pdfData, {
+    return new NextResponse(pdfData as unknown as BodyInit, {
         headers: {
             'Content-Type': 'application/pdf',
             'Content-Disposition': `inline; filename="invoice-${invoice.invoiceNumber}.pdf"`,

@@ -12,7 +12,8 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency, formatDate } from '@/lib/utils';
 
-const statusVariants: Record<string, string> = {
+type BadgeVariant = "secondary" | "default" | "success" | "destructive" | "outline" | "warning";
+const statusVariants: Record<string, BadgeVariant> = {
     DRAFT: 'secondary',
     SENT: 'default',
     VIEWED: 'default',

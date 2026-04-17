@@ -47,7 +47,7 @@ export function ReminderForm({ initialData }: ReminderFormProps) {
         defaultValues: {
             name: initialData?.name || '',
             subject: initialData?.subject || 'Payment Reminder for Invoice {{invoiceNumber}}',
-            body: initialData?.body || `Dear {{customerName}},\n\nThis is a reminder that invoice {{invoiceNumber}} for ${{ total }} is due on {{dueDate}}.\n\nPlease make payment at your earliest convenience.\n\nThank you,\n{{organizationName}}`,
+            body: initialData?.body || "Dear {{customerName}},\n\nThis is a reminder that invoice {{invoiceNumber}} for ${{total}} is due on {{dueDate}}.\n\nPlease make payment at your earliest convenience.\n\nThank you,\n{{organizationName}}",
             triggerDays: initialData?.triggerDays ?? -3,
             isActive: initialData?.isActive ?? true,
         },
