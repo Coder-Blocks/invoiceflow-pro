@@ -1,29 +1,17 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Button } from '@/components/ui/button';
-import {
-    Form,
-    FormControl,
-    FormField,
-    FormItem,
-    FormLabel,
-    FormMessage,
-} from '@/components/ui/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
+import { formatCurrency } from '@/lib/utils';
 
 const paymentSchema = z.object({
     invoiceId: z.string().optional(),
@@ -42,49 +30,51 @@ interface PaymentFormProps {
     customers?: any[];
 }
 
-function PaymentFormInner({ invoices = [], customers = [] }: PaymentFormProps) {
+export function PaymentForm({ invoices = [], customers = [] }: PaymentFormProps) {
     const router = useRouter();
     const searchParams = useSearchParams();
     const invoiceIdParam = searchParams.get('invoiceId');
+    const [selectedInvoice, setSelectedInvoice] = useState<any>(null);
     const [isLoading, setIsLoading] = useState(false);
 
     const form = useForm<PaymentFormValues>({
         resolver: zodResolver(paymentSchema),
         defaultValues: {
             invoiceId: invoiceIdParam || 'NONE',
-            customerId: 'NONE',
+            customerId: '',
             amount: 0,
             paymentDate: new Date().toISOString().split('T')[0],
-            paymentMethod: 'NONE',
+            paymentMethod: '',
             reference: '',
             notes: '',
         },
     });
 
+    useEffect(() => {
+        const inv = invoices.find(i => i.id === form.watch('invoiceId'));
+        setSelectedInvoice(inv);
+        if (inv) {
+            const balanceDue = inv.total - (inv.payments?.reduce((s: number, p: any) => s + p.amount, 0) || 0);
+            if (balanceDue > 0) form.setValue('amount', balanceDue);
+            form.setValue('customerId', inv.customerId);
+        } else {
+            form.setValue('amount', 0);
+            form.setValue('customerId', '');
+        }
+    }, [form.watch('invoiceId'), invoices, form]);
+
     const onSubmit = async (data: PaymentFormValues) => {
         setIsLoading(true);
-
-        const payload = {
-            ...data,
-            invoiceId: data.invoiceId === 'NONE' ? undefined : data.invoiceId,
-            customerId: data.customerId === 'NONE' ? undefined : data.customerId,
-            paymentMethod: data.paymentMethod === 'NONE' ? undefined : data.paymentMethod,
-        };
-
+        const payload = { ...data, invoiceId: data.invoiceId === 'NONE' ? undefined : data.invoiceId };
         try {
             const res = await fetch('/api/payments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-
             if (res.ok) {
                 toast.success('Payment recorded');
-                router.push(
-                    payload.invoiceId
-                        ? `/dashboard/invoices/${payload.invoiceId}`
-                        : '/dashboard/payments'
-                );
+                router.push(payload.invoiceId ? `/dashboard/invoices/${payload.invoiceId}` : '/dashboard/payments');
                 router.refresh();
             } else {
                 const error = await res.text();
@@ -97,28 +87,34 @@ function PaymentFormInner({ invoices = [], customers = [] }: PaymentFormProps) {
         }
     };
 
+    const watchInvoiceId = form.watch('invoiceId');
+
     return (
         <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-2xl space-y-6">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-xl">
                 <FormField
                     control={form.control}
                     name="invoiceId"
                     render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Invoice (optional)</FormLabel>
-                            <Select onValueChange={field.onChange} value={field.value || 'NONE'}>
+                            <FormLabel>Invoice (Optional)</FormLabel>
+                            <Select onValueChange={field.onChange} value={field.value}>
                                 <FormControl>
                                     <SelectTrigger>
                                         <SelectValue placeholder="Select an invoice" />
                                     </SelectTrigger>
                                 </FormControl>
                                 <SelectContent>
-                                    <SelectItem value="NONE">No invoice</SelectItem>
-                                    {invoices.map((inv: any) => (
-                                        <SelectItem key={inv.id} value={inv.id}>
-                                            {inv.invoiceNumber} — {inv.customer?.name || 'No customer'}
-                                        </SelectItem>
-                                    ))}
+                                    <SelectItem value="NONE">No invoice (direct payment)</SelectItem>
+                                    {invoices.map((inv: any) => {
+                                        const paid = inv.payments?.reduce((s: number, p: any) => s + p.amount, 0) || 0;
+                                        const balance = inv.total - paid;
+                                        return (
+                                            <SelectItem key={inv.id} value={inv.id} disabled={balance <= 0}>
+                                                {inv.invoiceNumber} - {inv.customer?.name} ({formatCurrency(balance)} due)
+                                            </SelectItem>
+                                        );
+                                    })}
                                 </SelectContent>
                             </Select>
                             <FormMessage />
@@ -126,53 +122,51 @@ function PaymentFormInner({ invoices = [], customers = [] }: PaymentFormProps) {
                     )}
                 />
 
-                <FormField
-                    control={form.control}
-                    name="customerId"
-                    render={({ field }) => (
-                        <FormItem>
-                            <FormLabel>Customer (optional)</FormLabel>
-                            <Select onValueChange={field.onChange} value={field.value || 'NONE'}>
-                                <FormControl>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select a customer" />
-                                    </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                    <SelectItem value="NONE">No customer</SelectItem>
-                                    {customers.map((customer: any) => (
-                                        <SelectItem key={customer.id} value={customer.id}>
-                                            {customer.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <FormMessage />
-                        </FormItem>
-                    )}
-                />
+                {watchInvoiceId === 'NONE' && (
+                    <FormField
+                        control={form.control}
+                        name="customerId"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Customer</FormLabel>
+                                <Select onValueChange={field.onChange} value={field.value}>
+                                    <FormControl>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select a customer" />
+                                        </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                        {customers.map((cust: any) => (
+                                            <SelectItem key={cust.id} value={cust.id}>{cust.name}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                )}
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-2 gap-4">
                     <FormField
                         control={form.control}
                         name="amount"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>Amount *</FormLabel>
+                                <FormLabel>Amount</FormLabel>
                                 <FormControl>
-                                    <Input type="number" step="0.01" placeholder="0.00" {...field} />
+                                    <Input type="number" step="0.01" min="0.01" {...field} />
                                 </FormControl>
                                 <FormMessage />
                             </FormItem>
                         )}
                     />
-
                     <FormField
                         control={form.control}
                         name="paymentDate"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>Payment Date *</FormLabel>
+                                <FormLabel>Payment Date</FormLabel>
                                 <FormControl>
                                     <Input type="date" {...field} />
                                 </FormControl>
@@ -182,42 +176,39 @@ function PaymentFormInner({ invoices = [], customers = [] }: PaymentFormProps) {
                     />
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-2 gap-4">
                     <FormField
                         control={form.control}
                         name="paymentMethod"
                         render={({ field }) => (
                             <FormItem>
                                 <FormLabel>Payment Method</FormLabel>
-                                <Select onValueChange={field.onChange} value={field.value || 'NONE'}>
+                                <Select onValueChange={field.onChange} value={field.value}>
                                     <FormControl>
                                         <SelectTrigger>
                                             <SelectValue placeholder="Select method" />
                                         </SelectTrigger>
                                     </FormControl>
                                     <SelectContent>
-                                        <SelectItem value="NONE">No method</SelectItem>
-                                        <SelectItem value="BANK_TRANSFER">Bank Transfer</SelectItem>
-                                        <SelectItem value="CASH">Cash</SelectItem>
-                                        <SelectItem value="CREDIT_CARD">Credit Card</SelectItem>
-                                        <SelectItem value="UPI">UPI</SelectItem>
-                                        <SelectItem value="CHEQUE">Cheque</SelectItem>
-                                        <SelectItem value="OTHER">Other</SelectItem>
+                                        <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                                        <SelectItem value="Credit Card">Credit Card</SelectItem>
+                                        <SelectItem value="Cash">Cash</SelectItem>
+                                        <SelectItem value="Check">Check</SelectItem>
+                                        <SelectItem value="Other">Other</SelectItem>
                                     </SelectContent>
                                 </Select>
                                 <FormMessage />
                             </FormItem>
                         )}
                     />
-
                     <FormField
                         control={form.control}
                         name="reference"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>Reference / Transaction ID</FormLabel>
+                                <FormLabel>Reference (Optional)</FormLabel>
                                 <FormControl>
-                                    <Input placeholder="UTR123456..." {...field} />
+                                    <Input placeholder="Check #, Transaction ID" {...field} />
                                 </FormControl>
                                 <FormMessage />
                             </FormItem>
@@ -232,7 +223,7 @@ function PaymentFormInner({ invoices = [], customers = [] }: PaymentFormProps) {
                         <FormItem>
                             <FormLabel>Notes</FormLabel>
                             <FormControl>
-                                <Textarea placeholder="Optional notes..." {...field} />
+                                <Textarea placeholder="Additional notes..." {...field} />
                             </FormControl>
                             <FormMessage />
                         </FormItem>
@@ -244,18 +235,10 @@ function PaymentFormInner({ invoices = [], customers = [] }: PaymentFormProps) {
                         Cancel
                     </Button>
                     <Button type="submit" disabled={isLoading}>
-                        {isLoading ? 'Saving...' : 'Record Payment'}
+                        Record Payment
                     </Button>
                 </div>
             </form>
         </Form>
-    );
-}
-
-export function PaymentForm(props: PaymentFormProps) {
-    return (
-        <Suspense fallback={<div className="p-4 text-muted-foreground">Loading form...</div>}>
-            <PaymentFormInner {...props} />
-        </Suspense>
     );
 }
