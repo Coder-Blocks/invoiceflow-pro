@@ -4,13 +4,21 @@ import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || "",
-  key_secret: process.env.RAZORPAY_KEY_SECRET || "",
-});
-
 export async function POST(req: Request) {
   try {
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+    if (!keyId || !keySecret) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Razorpay keys missing. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Vercel ENV and redeploy.",
+        },
+        { status: 500 }
+      );
+    }
+
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.id) {
@@ -38,22 +46,29 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
+
     const amount = Number(body.amount);
-    const plan = String(body.plan || "STARTER");
+    const plan = String(body.plan || "STARTER").toUpperCase();
 
     if (!amount || amount <= 0) {
       return NextResponse.json(
-        { success: false, error: "Invalid amount" },
+        { success: false, error: "Invalid amount received from billing page" },
         { status: 400 }
       );
     }
 
+    const razorpay = new Razorpay({
+      key_id: keyId,
+      key_secret: keySecret,
+    });
+
     const order = await razorpay.orders.create({
       amount: Math.round(amount * 100),
       currency: "INR",
-      receipt: `org_${membership.organizationId}_${Date.now()}`,
+      receipt: `ifp_${Date.now()}`,
       notes: {
         organizationId: membership.organizationId,
+        organizationName: membership.organization.name,
         plan,
       },
     });
@@ -61,12 +76,19 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       order,
-      key: process.env.RAZORPAY_KEY_ID,
+      key: keyId,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("CREATE_RAZORPAY_ORDER_ERROR:", error);
+
     return NextResponse.json(
-      { success: false, error: "Failed to create Razorpay order" },
+      {
+        success: false,
+        error:
+          error?.error?.description ||
+          error?.message ||
+          "Failed to create Razorpay order",
+      },
       { status: 500 }
     );
   }

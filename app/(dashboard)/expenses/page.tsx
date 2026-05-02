@@ -31,7 +31,7 @@ export default async function ExpensesPage() {
 
   return (
     <div className="premium-page space-y-8 p-1">
-      <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-r from-blue-800 via-blue-700 to-indigo-700 p-8 text-white shadow-2xl shadow-blue-200">
+      <div className="relative overflow-hidden rounded-4xl bg-linear-to-r from-blue-800 via-blue-700 to-indigo-700 p-8 text-white shadow-2xl shadow-blue-200">
         <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-white/10 blur-3xl" />
         <div className="absolute -bottom-24 left-20 h-56 w-56 rounded-full bg-cyan-300/20 blur-3xl" />
 
@@ -187,7 +187,7 @@ function StatCard({
           <p className="mt-2 text-sm text-slate-500">{description}</p>
         </div>
 
-        <div className="rounded-2xl bg-gradient-to-br from-blue-700 to-blue-500 p-3 text-white shadow-lg shadow-blue-200">
+        <div className="rounded-2xl bg-linear-to-br from-blue-700 to-blue-500 p-3 text-white shadow-lg shadow-blue-200">
           {icon}
         </div>
       </div>
