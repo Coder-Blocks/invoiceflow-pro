@@ -81,8 +81,126 @@ function extractInvoiceDate(text: string): string {
   return normalizeInvoiceDate(match?.[1] || "");
 }
 
-function buildExcelBase64(items: ParsedMedicineItem[]): string {
-  const rows =
+async function callOcrSpace(file: File) {
+  const apiKey = process.env.OCR_SPACE_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("OCR_SPACE_API_KEY missing in environment.");
+  }
+
+  const form = new FormData();
+  form.append("file", file);
+  form.append("language", "eng");
+  form.append("isOverlayRequired", "false");
+  form.append("scale", "true");
+  form.append("isTable", "true");
+  form.append("OCREngine", "2");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+
+  try {
+    const res = await fetch("https://api.ocr.space/parse/image", {
+      method: "POST",
+      headers: {
+        apikey: apiKey,
+      },
+      body: form,
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      throw new Error(`OCR API failed with status ${res.status}`);
+    }
+
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseMedicineRowsFromText(text: string, billFileUrl: string): ParsedMedicineItem[] {
+  const vendorName = extractVendorName(text);
+  const invoiceNumber = extractInvoiceNumber(text);
+  const invoiceDate = extractInvoiceDate(text);
+
+  const lines = text
+    .split(/\r?\n/)
+    .map(cleanLine)
+    .filter(Boolean);
+
+  const items: ParsedMedicineItem[] = [];
+
+  for (const line of lines) {
+    // Generic OCR row matcher
+    // Example target:
+    // 1 1.00 0.00 30ML MONOCEF O CV 100 SYR ARISTO PHA CD25626 05/27 201.56 153.57 30042019 5 5.00 153.19
+    const match = line.match(
+      /^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+?)\s+([A-Z0-9/-]{4,})\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/
+    );
+
+    if (!match) continue;
+
+    const quantity = toNumber(match[2]);
+    let leftText = match[4].trim();
+    const batchNumber = match[5].trim();
+    const expiryDate = normalizeExpiry(match[6]);
+    const mrp = toNumber(match[7]);
+    const purchasePrice = toNumber(match[8]);
+    const gstPercent = toNumber(match[10]);
+    const discountPercent = toNumber(match[11]);
+    const value = toNumber(match[12]);
+
+    let pack = "";
+    let medicineName = leftText;
+
+    const packMatch =
+      leftText.match(/^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|S))\s+(.+)$/i) ||
+      leftText.match(/^((?:\d+[A-Z]+)|(?:\d+\s+[A-Z]+))\s+(.+)$/i);
+
+    if (packMatch) {
+      pack = packMatch[1].trim();
+      medicineName = packMatch[2].trim();
+    }
+
+    medicineName = medicineName
+      .replace(/\s+[A-Z]{2,}(?:\s+[A-Z]{2,}){0,2}$/i, "")
+      .trim();
+
+    if (!medicineName || !batchNumber) continue;
+
+    items.push({
+      medicineName,
+      batchNumber,
+      expiryDate,
+      quantity,
+      purchasePrice,
+      sellingPrice: mrp || purchasePrice,
+      vendorName,
+      invoiceNumber,
+      invoiceDate,
+      pack,
+      mrp,
+      gstPercent,
+      discountPercent,
+      value,
+      billFileUrl,
+    });
+  }
+
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.medicineName}|${item.batchNumber}|${item.expiryDate}|${item.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildExcelBase64(items: ParsedMedicineItem[], rawText: string): string {
+  const wb = XLSX.utils.book_new();
+
+  const stockRows =
     items.length > 0
       ? items.map((item) => ({
           "Vendor Name": item.vendorName,
@@ -121,191 +239,25 @@ function buildExcelBase64(items: ParsedMedicineItem[]): string {
           },
         ];
 
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(wb, ws, "Medical Stock");
-  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-  return buffer.toString("base64");
-}
+  const stockSheet = XLSX.utils.json_to_sheet(stockRows);
+  XLSX.utils.book_append_sheet(wb, stockSheet, "Medical Stock");
 
-async function callOcrSpace(file: File) {
-  const apiKey = process.env.OCR_SPACE_API_KEY;
+  const rawLines = rawText
+    ? rawText.split(/\r?\n/).map((line, index) => ({
+        Line: index + 1,
+        Text: line,
+      }))
+    : [{ Line: 1, Text: "No OCR text extracted" }];
 
-  if (!apiKey) {
-    throw new Error("OCR_SPACE_API_KEY is missing in environment variables.");
-  }
+  const rawSheet = XLSX.utils.json_to_sheet(rawLines);
+  XLSX.utils.book_append_sheet(wb, rawSheet, "OCR Raw Text");
 
-  const form = new FormData();
-  form.append("file", file);
-  form.append("language", "eng");
-  form.append("isOverlayRequired", "false");
-  form.append("scale", "true");
-  form.append("isTable", "true");
-  form.append("OCREngine", "3");
-  form.append("filetype", file.type === "application/pdf" ? "PDF" : "JPG");
-
-  const res = await fetch("https://api.ocr.space/parse/image", {
-    method: "POST",
-    headers: {
-      apikey: apiKey,
-    },
-    body: form,
+  const buffer = XLSX.write(wb, {
+    type: "buffer",
+    bookType: "xlsx",
   });
 
-  if (!res.ok) {
-    throw new Error(`OCR API failed with status ${res.status}`);
-  }
-
-  const data = await res.json();
-  return data;
-}
-
-function parseMarkdownTable(text: string, billFileUrl: string): ParsedMedicineItem[] {
-  const vendorName = extractVendorName(text);
-  const invoiceNumber = extractInvoiceNumber(text);
-  const invoiceDate = extractInvoiceDate(text);
-
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-
-  const tableLines = lines.filter((l) => l.startsWith("|") && l.endsWith("|"));
-  if (tableLines.length < 3) return [];
-
-  const rows: ParsedMedicineItem[] = [];
-
-  for (const line of tableLines) {
-    if (
-      /Sr|Qty|FQty|Pack|Product Description|Mfg|Batch|Exp|MRP|Rate|HSN|GST|Dis|Value/i.test(
-        line
-      )
-    ) {
-      continue;
-    }
-
-    if (/^\|?\s*-+\s*\|/.test(line)) {
-      continue;
-    }
-
-    const cols = line
-      .split("|")
-      .map((c) => c.trim())
-      .filter((c) => c.length > 0);
-
-    if (cols.length < 13) continue;
-
-    const sr = cols[0];
-    if (!/^\d+$/.test(sr)) continue;
-
-    const quantity = toNumber(cols[1]);
-    const pack = cols[3] || "";
-    const medicineName = cols[4] || "";
-    const batchNumber = cols[6] || "";
-    const expiryDate = normalizeExpiry(cols[7] || "");
-    const mrp = toNumber(cols[8]);
-    const purchasePrice = toNumber(cols[9]);
-    const gstPercent = toNumber(cols[11]);
-    const discountPercent = toNumber(cols[12]);
-    const value = toNumber(cols[13]);
-
-    if (!medicineName || !batchNumber) continue;
-
-    rows.push({
-      medicineName,
-      batchNumber,
-      expiryDate,
-      quantity,
-      purchasePrice,
-      sellingPrice: mrp || purchasePrice,
-      vendorName,
-      invoiceNumber,
-      invoiceDate,
-      pack,
-      mrp,
-      gstPercent,
-      discountPercent,
-      value,
-      billFileUrl,
-    });
-  }
-
-  return rows;
-}
-
-function parseFlatTableLines(text: string, billFileUrl: string): ParsedMedicineItem[] {
-  const vendorName = extractVendorName(text);
-  const invoiceNumber = extractInvoiceNumber(text);
-  const invoiceDate = extractInvoiceDate(text);
-
-  const rawLines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
-  const items: ParsedMedicineItem[] = [];
-
-  for (const line of rawLines) {
-    // Expected OCR-space table-ish line:
-    // 1 1.00 0.00 30ML MONOCEF O CV 100 SYR ARISTO PHA CD25626 05/27 201.56 153.57 30042019 5 5.00 153.19
-    const match = line.match(
-      /^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+?)\s+([A-Z0-9/-]{4,})\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/
-    );
-
-    if (!match) continue;
-
-    let left = match[4].trim();
-    const batchNumber = match[5].trim();
-    const expiryDate = normalizeExpiry(match[6].trim());
-    const mrp = toNumber(match[7]);
-    const purchasePrice = toNumber(match[8]);
-    const gstPercent = toNumber(match[10]);
-    const discountPercent = toNumber(match[11]);
-    const value = toNumber(match[12]);
-    const quantity = toNumber(match[2]);
-
-    let pack = "";
-    let medicineName = left;
-
-    const packMatch =
-      left.match(/^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|S))\s+(.+)$/i) ||
-      left.match(/^((?:\d+[A-Z]+)|(?:\d+\s+[A-Z]+))\s+(.+)$/i);
-
-    if (packMatch) {
-      pack = packMatch[1].trim();
-      medicineName = packMatch[2].trim();
-    }
-
-    // remove likely manufacturer tail before batch
-    medicineName = medicineName
-      .replace(/\s+[A-Z]{2,}(?:\s+[A-Z]{2,}){0,2}$/i, "")
-      .trim();
-
-    if (!medicineName) continue;
-
-    items.push({
-      medicineName,
-      batchNumber,
-      expiryDate,
-      quantity,
-      purchasePrice,
-      sellingPrice: mrp || purchasePrice,
-      vendorName,
-      invoiceNumber,
-      invoiceDate,
-      pack,
-      mrp,
-      gstPercent,
-      discountPercent,
-      value,
-      billFileUrl,
-    });
-  }
-
-  return items;
-}
-
-function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedicineItem[] {
-  const markdownRows = parseMarkdownTable(text, billFileUrl);
-  if (markdownRows.length > 0) return markdownRows;
-
-  const flatRows = parseFlatTableLines(text, billFileUrl);
-  if (flatRows.length > 0) return flatRows;
-
-  return [];
+  return buffer.toString("base64");
 }
 
 export async function POST(req: NextRequest) {
@@ -336,10 +288,10 @@ export async function POST(req: NextRequest) {
 
     const billFileUrl = file.name;
     const parsedItems = parsedText
-      ? parseMedicalInvoiceText(parsedText, billFileUrl)
+      ? parseMedicineRowsFromText(parsedText, billFileUrl)
       : [];
 
-    const excelBase64 = buildExcelBase64(parsedItems);
+    const excelBase64 = buildExcelBase64(parsedItems, parsedText);
 
     return NextResponse.json({
       success: true,
@@ -349,13 +301,12 @@ export async function POST(req: NextRequest) {
       parsedCount: parsedItems.length,
       excelBase64,
       excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
-      extractedText: parsedText.slice(0, 5000),
+      extractedText: parsedText.slice(0, 6000),
       message:
         parsedItems.length > 0
           ? `Bill parsed successfully. ${parsedItems.length} items found.`
           : "OCR finished, but no medicine rows could be parsed.",
-      ocrError:
-        ocrData?.IsErroredOnProcessing || false,
+      ocrErrored: ocrData?.IsErroredOnProcessing || false,
       ocrMessages: ocrData?.ErrorMessage || [],
     });
   } catch (error) {
