@@ -27,6 +27,10 @@ function toNumber(value: string | number | undefined | null): number {
   return Number.isFinite(num) ? num : 0;
 }
 
+function cleanLine(line: string): string {
+  return line.replace(/\s+/g, " ").trim();
+}
+
 function normalizeExpiry(value: string): string {
   const v = String(value || "").trim();
   const mmYY = v.match(/^(\d{2})\/(\d{2})$/);
@@ -71,16 +75,12 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
   }
 }
 
-function cleanLine(line: string): string {
-  return line.replace(/\s+/g, " ").trim();
-}
-
 function extractVendorName(text: string): string {
   const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
 
-  const gstInvoiceIndex = lines.findIndex((l) => /GST INVOICE/i.test(l));
-  if (gstInvoiceIndex >= 0) {
-    for (let i = gstInvoiceIndex + 1; i < Math.min(gstInvoiceIndex + 8, lines.length); i++) {
+  const gstIndex = lines.findIndex((l) => /GST INVOICE/i.test(l));
+  if (gstIndex >= 0) {
+    for (let i = gstIndex + 1; i < Math.min(gstIndex + 10, lines.length); i++) {
       const line = lines[i];
       if (
         line &&
@@ -91,8 +91,8 @@ function extractVendorName(text: string): string {
     }
   }
 
-  const pvtLine = lines.find((l) => /PVT LTD|LIMITED/i.test(l));
-  return pvtLine || "";
+  const fallback = lines.find((l) => /PVT LTD|LIMITED/i.test(l));
+  return fallback || "";
 }
 
 function extractInvoiceNumber(text: string): string {
@@ -105,10 +105,10 @@ function extractInvoiceDate(text: string): string {
   return normalizeInvoiceDate(match?.[1] || "");
 }
 
-function isHeaderOrFooterNoise(line: string): boolean {
+function isNoiseLine(line: string): boolean {
   return (
     !line ||
-    /GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs :|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO|WE HEREBY|INTEREST AT|Subject to|Last 5 Payment|SVMPL QR|Duplicate/i.test(
+    /Qty\. Pack Batch No\. Exp\.Dt\. MRP Product Description|Old MRP Rate HSN GST|GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs :|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO|WE HEREBY|INTEREST AT|Subject to|Last 5 Payment|SVMPL QR|CUS000|TELANGANA|HYDERABAD|KUKATPALLY|PRAGATI NAGAR/i.test(
       line
     )
   );
@@ -118,41 +118,37 @@ function isAmountOnlyLine(line: string): boolean {
   return /^\|?\s*[\d.]+\s*$/.test(line);
 }
 
-function isDescriptionStarter(line: string): boolean {
-  return /^\d+(?:\.\d+)?\s+/.test(line) && !looksLikeDetailLine(line);
-}
-
 function looksLikeDetailLine(line: string): boolean {
   const parts = line.split(/\s+/);
   const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
-  if (expIndex < 4) return false;
+  if (expIndex < 2) return false;
 
-  const after = parts.slice(expIndex + 1);
-  if (after.length < 6) return false;
+  const tail = parts.slice(expIndex + 1);
+  if (tail.length < 6) return false;
 
-  return /^\d{8}$/.test(after[2] || "");
+  return /^\d{8}$/.test(tail[2] || "");
 }
 
-function parseDetailLine(line: string) {
+function parseDetailFromRight(line: string) {
   const parts = line.split(/\s+/);
   const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
-  if (expIndex < 4) return null;
+  if (expIndex < 2) return null;
 
-  const after = parts.slice(expIndex + 1);
-  if (after.length < 6) return null;
-  if (!/^\d{8}$/.test(after[2] || "")) return null;
+  const tail = parts.slice(expIndex + 1);
+  if (tail.length < 6) return null;
+  if (!/^\d{8}$/.test(tail[2] || "")) return null;
 
-  const quantity = toNumber(parts[0]);
+  const prefix = parts.slice(0, expIndex - 1).join(" ").trim();
   const batchNumber = parts[expIndex - 1];
   const expiryDate = normalizeExpiry(parts[expIndex]);
-  const mrp = toNumber(after[0]);
-  const purchasePrice = toNumber(after[1]);
-  const gstPercent = toNumber(after[3]);
-  const discountPercent = toNumber(after[4]);
-  const value = toNumber(after[5]);
+  const mrp = toNumber(tail[0]);
+  const purchasePrice = toNumber(tail[1]);
+  const gstPercent = toNumber(tail[3]);
+  const discountPercent = toNumber(tail[4]);
+  const value = toNumber(tail[5]);
 
   return {
-    quantity,
+    prefix,
     batchNumber,
     expiryDate,
     mrp,
@@ -163,39 +159,81 @@ function parseDetailLine(line: string) {
   };
 }
 
-function cleanupMedicineText(text: string): string {
+function cleanupDescriptionText(text: string): string {
   return text
-    .replace(/\|\s*[\d.]+/g, "")
+    .replace(/\|\s*[\d.]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function derivePackAndMedicine(description: string) {
-  const cleaned = cleanupMedicineText(description);
+function extractQtyPackMedicineFromDescription(raw: string) {
+  const cleaned = cleanupDescriptionText(raw);
 
-  const frontPackMatch = cleaned.match(
-    /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))\s+(.+)$/i
-  );
-  if (frontPackMatch) {
-    return {
-      pack: frontPackMatch[1].trim(),
-      medicineName: frontPackMatch[2].trim(),
-    };
+  let quantity = 0;
+  let pack = "";
+  let medicineName = cleaned;
+
+  const qtyMatch = cleaned.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
+  if (qtyMatch) {
+    quantity = toNumber(qtyMatch[1]);
+    medicineName = qtyMatch[2].trim();
   }
 
-  const endPackMatch = cleaned.match(
-    /^(.+?)\s+((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))$/i
+  const packStartMatch = medicineName.match(
+    /^((?:\d+[A-Z]+)|(?:\d+(?:\.\d+)?\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT)))\s+(.+)$/i
   );
-  if (endPackMatch) {
-    return {
-      pack: endPackMatch[2].trim(),
-      medicineName: endPackMatch[1].trim(),
-    };
+  if (packStartMatch) {
+    pack = packStartMatch[1].trim();
+    medicineName = packStartMatch[2].trim();
   }
 
   return {
-    pack: "",
-    medicineName: cleaned,
+    quantity,
+    pack,
+    medicineName: medicineName.trim(),
+  };
+}
+
+function extractInlineCombined(prefix: string) {
+  let cleaned = cleanupDescriptionText(prefix);
+
+  const serialMatch = cleaned.match(/^(\d+)\s+(.*)$/);
+  if (serialMatch) {
+    cleaned = serialMatch[2];
+  }
+
+  const qtyMatch = cleaned.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
+  const quantity = qtyMatch ? toNumber(qtyMatch[1]) : 0;
+  cleaned = qtyMatch ? qtyMatch[2] : cleaned;
+
+  const freeMatch = cleaned.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
+  if (freeMatch) {
+    cleaned = freeMatch[2];
+  }
+
+  let manufacturer = "";
+  const tokens = cleaned.split(/\s+/);
+
+  if (tokens.length >= 3) {
+    const lastTwo = tokens.slice(-2).join(" ");
+    const lastOne = tokens.slice(-1).join(" ");
+
+    if (/^[A-Z][A-Z0-9().&/-]*\s+[A-Z][A-Z0-9().&/-]*$/i.test(lastTwo)) {
+      manufacturer = lastTwo;
+      cleaned = tokens.slice(0, -2).join(" ");
+    } else if (/^[A-Z][A-Z0-9().&/-]*$/i.test(lastOne)) {
+      manufacturer = lastOne;
+      cleaned = tokens.slice(0, -1).join(" ");
+    }
+  }
+
+  const extracted = extractQtyPackMedicineFromDescription(`${quantity} ${cleaned}`);
+
+  return {
+    quantity: extracted.quantity || quantity,
+    pack: extracted.pack,
+    medicineName: extracted.medicineName,
+    manufacturer,
   };
 }
 
@@ -213,25 +251,39 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
   let descBuffer: string[] = [];
 
   for (const line of lines) {
-    if (isHeaderOrFooterNoise(line)) continue;
+    if (isNoiseLine(line)) continue;
     if (isAmountOnlyLine(line)) continue;
 
     if (looksLikeDetailLine(line)) {
-      const detail = parseDetailLine(line);
+      const detail = parseDetailFromRight(line);
       if (!detail) {
         descBuffer = [];
         continue;
       }
 
-      const description = descBuffer.join(" ").trim();
-      const { pack, medicineName } = derivePackAndMedicine(description);
+      let quantity = 0;
+      let pack = "";
+      let medicineName = "";
+
+      if (descBuffer.length > 0) {
+        const descText = descBuffer.join(" ");
+        const extracted = extractQtyPackMedicineFromDescription(descText);
+        quantity = extracted.quantity;
+        pack = extracted.pack;
+        medicineName = extracted.medicineName;
+      } else {
+        const inline = extractInlineCombined(detail.prefix);
+        quantity = inline.quantity;
+        pack = inline.pack;
+        medicineName = inline.medicineName;
+      }
 
       if (medicineName) {
         items.push({
           medicineName,
           batchNumber: detail.batchNumber,
           expiryDate: detail.expiryDate,
-          quantity: detail.quantity,
+          quantity,
           purchasePrice: detail.purchasePrice,
           sellingPrice: detail.mrp || detail.purchasePrice,
           vendorName,
@@ -250,14 +302,13 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
       continue;
     }
 
-    if (isDescriptionStarter(line) || descBuffer.length > 0) {
-      descBuffer.push(line);
-    }
+    descBuffer.push(line);
   }
 
   return items.filter(
     (item, index, arr) =>
       item.medicineName &&
+      item.quantity > 0 &&
       arr.findIndex(
         (x) =>
           x.medicineName === item.medicineName &&
