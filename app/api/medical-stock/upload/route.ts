@@ -72,8 +72,27 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
 }
 
 function extractVendorName(text: string) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const idx = lines.findIndex((l) => /GST INVOICE/i.test(l));
+  if (idx !== -1) {
+    for (let i = idx + 1; i < Math.min(idx + 10, lines.length); i++) {
+      const line = lines[i];
+      if (
+        line &&
+        !/Duplicate Copy|Page|Food Lic|Bank|Account|IFSC|CIN|MSME|A UNIT OF/i.test(
+          line
+        )
+      ) {
+        return line;
+      }
+    }
+  }
+
   const match =
-    text.match(/GST INVOICE[\s\S]{0,500}?\n([A-Z0-9\s().,&/-]{8,})\n/i) ||
     text.match(/\n([A-Z0-9\s().,&/-]{8,}PVT LTD)\n/i) ||
     text.match(/\n([A-Z0-9\s().,&/-]{8,}LIMITED)\n/i);
 
@@ -93,36 +112,82 @@ function extractInvoiceDate(text: string) {
 function isNoiseLine(line: string) {
   return (
     !line ||
-    /GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO/i.test(
+    /GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO|WE HEREBY|INTEREST AT|Subject to|Last 5 Payment/i.test(
       line
     )
   );
 }
 
-function looksLikeDetailLine(line: string) {
-  return /^\d+\s+[\d.]+\s+[\d.]+\s+.+\s+[A-Z0-9-]+\s+\d{2}\/\d{2}\s+[\d.]+\s+[\d.]+\s+\d{8}\s+[\d.]+\s+[\d.]+\s+[\d.]+$/i.test(
-    line
-  );
+function cleanDescriptionLine(line: string) {
+  return line.replace(/\|\s*[\d.]+/g, "").replace(/\s+/g, " ").trim();
 }
 
 function derivePackAndMedicine(source: string) {
-  let text = source.replace(/\|\s*[\d.]+/g, "").replace(/\s+/g, " ").trim();
-  text = text.replace(/^[\d.]+\s+/, "").trim();
+  const text = cleanDescriptionLine(source);
 
-  const packMatch = text.match(
+  const frontPackMatch = text.match(
     /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))\s+(.+)$/i
   );
 
-  if (packMatch) {
+  if (frontPackMatch) {
     return {
-      pack: packMatch[1].trim(),
-      medicineName: packMatch[2].trim(),
+      pack: frontPackMatch[1].trim(),
+      medicineName: frontPackMatch[2].trim(),
+    };
+  }
+
+  const tailPackMatch = text.match(
+    /^(.+?)\s+((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))$/i
+  );
+
+  if (tailPackMatch) {
+    return {
+      pack: tailPackMatch[2].trim(),
+      medicineName: tailPackMatch[1].trim(),
     };
   }
 
   return {
     pack: "",
-    medicineName: text.trim(),
+    medicineName: text,
+  };
+}
+
+function parseDetailLine(line: string) {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length < 8) return null;
+
+  const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
+  if (expIndex === -1) return null;
+  if (expIndex < 3) return null;
+
+  const numericTail = parts.slice(expIndex + 1);
+  if (numericTail.length < 6) return null;
+
+  const batchNumber = parts[expIndex - 1];
+  const mfg = parts.slice(2, expIndex - 1).join(" ").trim();
+
+  const expiryDate = normalizeExpiry(parts[expIndex]);
+  const mrp = toNumber(numericTail[0]);
+  const purchasePrice = toNumber(numericTail[1]);
+  const hsn = numericTail[2] || "";
+  const gstPercent = toNumber(numericTail[3]);
+  const discountPercent = toNumber(numericTail[4]);
+  const value = toNumber(numericTail[5]);
+
+  if (!/^\d{8}$/.test(hsn)) return null;
+
+  return {
+    quantity: toNumber(parts[0]),
+    freeQty: toNumber(parts[1]),
+    mfg,
+    batchNumber,
+    expiryDate,
+    mrp,
+    purchasePrice,
+    gstPercent,
+    discountPercent,
+    value,
   };
 }
 
@@ -131,67 +196,53 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
   const invoiceNumber = extractInvoiceNumber(text);
   const invoiceDate = extractInvoiceDate(text);
 
-  const rawLines = text
+  const lines = text
     .split(/\r?\n/)
-    .map((l) => l.replace(/\s+/g, " ").trim());
-
-  const lines = rawLines.filter(Boolean);
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 
   const items: ParsedMedicineItem[] = [];
   let pendingDescription: string[] = [];
 
   for (const line of lines) {
-    if (isNoiseLine(line)) {
+    if (isNoiseLine(line)) continue;
+
+    const detail = parseDetailLine(line);
+
+    if (detail) {
+      const descriptionText = pendingDescription
+        .map(cleanDescriptionLine)
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      const { pack, medicineName } = derivePackAndMedicine(descriptionText);
+
+      if (medicineName) {
+        items.push({
+          medicineName,
+          batchNumber: detail.batchNumber,
+          expiryDate: detail.expiryDate,
+          quantity: detail.quantity,
+          purchasePrice: detail.purchasePrice,
+          sellingPrice: detail.mrp || detail.purchasePrice,
+          vendorName,
+          invoiceNumber,
+          invoiceDate,
+          pack,
+          mrp: detail.mrp,
+          gstPercent: detail.gstPercent,
+          discountPercent: detail.discountPercent,
+          value: detail.value,
+          billFileUrl,
+        });
+      }
+
+      pendingDescription = [];
       continue;
     }
 
-    if (looksLikeDetailLine(line)) {
-      const detailMatch = line.match(
-        /^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+?)\s+([A-Z0-9-]+)\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/i
-      );
-
-      if (!detailMatch) {
-        pendingDescription = [];
-        continue;
-      }
-
-      const qty = toNumber(detailMatch[2]);
-      const inlineLeft = detailMatch[4].trim();
-      const batchNumber = detailMatch[5].trim();
-      const expiryDate = normalizeExpiry(detailMatch[6]);
-      const mrp = toNumber(detailMatch[7]);
-      const purchasePrice = toNumber(detailMatch[8]);
-      const gstPercent = toNumber(detailMatch[10]);
-      const discountPercent = toNumber(detailMatch[11]);
-      const value = toNumber(detailMatch[12]);
-
-      const descriptionSource =
-        pendingDescription
-          .filter((x) => !/^\|\s*[\d.]+$/.test(x))
-          .join(" ")
-          .trim() || inlineLeft;
-
-      const { pack, medicineName } = derivePackAndMedicine(descriptionSource);
-
-      items.push({
-        medicineName,
-        batchNumber,
-        expiryDate,
-        quantity: qty,
-        purchasePrice,
-        sellingPrice: mrp || purchasePrice,
-        vendorName,
-        invoiceNumber,
-        invoiceDate,
-        pack,
-        mrp,
-        gstPercent,
-        discountPercent,
-        value,
-        billFileUrl,
-      });
-
-      pendingDescription = [];
+    if (/^\d+\.\d{2}\s+/.test(line) || /^\|\s*[\d.]+$/.test(line)) {
       continue;
     }
 
@@ -308,10 +359,11 @@ export async function POST(req: NextRequest) {
       excelBase64,
       excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
       extractedText: extractedText.slice(0, 4000),
+      parsedCount: parsedItems.length,
       message:
         parsedItems.length > 0
-          ? "Bill parsed successfully and Excel prepared."
-          : "Bill uploaded safely. Parsing failed, but manual entry and Excel template are available.",
+          ? `Bill parsed successfully. ${parsedItems.length} items found.`
+          : "Bill uploaded safely, but no medicine rows could be parsed.",
     });
   } catch (error) {
     console.error("Medical stock upload error:", error);
