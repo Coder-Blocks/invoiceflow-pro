@@ -302,42 +302,52 @@ export default function MedicalStockPage() {
   };
 
   const handleSave = async () => {
-    setSaving(true);
-    setError("");
-    setMessage("");
+  setSaving(true);
+  setError("");
+  setMessage("");
 
-    try {
-      const cleanRows = sanitizeRows(rows, billFileUrl);
+  try {
+    const cleanRows = sanitizeRows(rows, billFileUrl);
 
-      if (cleanRows.length === 0) {
-        throw new Error("Please add at least one medicine row before saving.");
-      }
-
-      const res = await fetch("/api/medical-stock/save", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          items: cleanRows,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data?.error || "Failed to save stock");
-      }
-
-      setMessage("Medical stock saved successfully.");
-      await fetchSavedItems();
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Failed to save stock");
-    } finally {
-      setSaving(false);
+    if (cleanRows.length === 0) {
+      throw new Error("Please add at least one medicine row before saving.");
     }
-  };
+
+    // Temporary fallback:
+    // ikkada mee actual org id pettali.
+    // later session/user API nundi dynamic ga teesukovachu.
+    const organizationId = "cmoos5qty0001l704xbn7jhx6";
+
+    const res = await fetch("/api/medical-stock/save", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        organizationId,
+        items: cleanRows.map((row: any) => ({
+          ...row,
+          unitType: row.pack || "UNIT",
+          lowStockThreshold: 10,
+        })),
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data?.error || "Failed to save stock");
+    }
+
+    setMessage("Medical stock saved successfully.");
+    await fetchSavedItems();
+  } catch (err) {
+    console.error(err);
+    setError(err instanceof Error ? err.message : "Failed to save stock");
+  } finally {
+    setSaving(false);
+  }
+};
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
