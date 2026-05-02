@@ -138,23 +138,29 @@ export default function MedicalStockPage() {
   }, [rows]);
 
   const fetchSavedItems = async () => {
-    setLoadingList(true);
-    try {
-      const res = await fetch("/api/medical-stock/list", { cache: "no-store" });
-      const data = await res.json();
+  setLoadingList(true);
+  try {
+    const organizationId = "PASTE_REAL_ORGANIZATION_ID_HERE";
 
-      if (!res.ok) {
-        throw new Error(data?.error || "Failed to fetch stock list");
-      }
+    const res = await fetch(
+      `/api/medical-stock/list?organizationId=${organizationId}`,
+      { cache: "no-store" }
+    );
 
-      setSavedItems(Array.isArray(data.items) ? data.items : []);
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Failed to fetch stock list");
-    } finally {
-      setLoadingList(false);
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data?.error || "Failed to fetch stock list");
     }
-  };
+
+    setSavedItems(Array.isArray(data.items) ? data.items : []);
+  } catch (err) {
+    console.error(err);
+    setError(err instanceof Error ? err.message : "Failed to fetch stock list");
+  } finally {
+    setLoadingList(false);
+  }
+};
 
   useEffect(() => {
     fetchSavedItems();

@@ -1,34 +1,59 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-function getModel() {
-  const p = prisma as any;
-  return p.medicalStockItem || p.medicalStock || null;
-}
-
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const model = getModel();
+    const { searchParams } = new URL(req.url);
+    const organizationId = String(searchParams.get("organizationId") || "").trim();
 
-    if (!model) {
-      return NextResponse.json({
-        items: [],
-        warning:
-          "Medical stock Prisma model not found. Please ensure your Prisma schema has medicalStockItem or medicalStock model.",
-      });
+    if (!organizationId) {
+      return NextResponse.json(
+        { error: "organizationId is required" },
+        { status: 400 }
+      );
     }
 
-    const items = await model.findMany({
+    const items = await prisma.medicineStock.findMany({
+      where: {
+        organizationId,
+      },
       orderBy: {
         createdAt: "desc",
       },
+      select: {
+        id: true,
+        medicineName: true,
+        batchNumber: true,
+        expiryDate: true,
+        quantity: true,
+        costPrice: true,
+        sellingPrice: true,
+        vendorName: true,
+        billFileUrl: true,
+        createdAt: true,
+      },
     });
+
+    const formatted = items.map((item) => ({
+      id: item.id,
+      medicineName: item.medicineName,
+      batchNumber: item.batchNumber,
+      expiryDate: item.expiryDate
+        ? new Date(item.expiryDate).toISOString().split("T")[0]
+        : "",
+      quantity: item.quantity,
+      purchasePrice: Number(item.costPrice ?? 0),
+      sellingPrice: Number(item.sellingPrice ?? 0),
+      vendorName: item.vendorName || "",
+      billFileUrl: item.billFileUrl || "",
+      createdAt: item.createdAt,
+    }));
 
     return NextResponse.json({
       success: true,
-      items,
+      items: formatted,
     });
   } catch (error) {
     console.error("Medical stock list error:", error);
