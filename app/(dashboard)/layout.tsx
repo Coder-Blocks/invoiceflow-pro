@@ -78,7 +78,7 @@ export default function DashboardLayout({ children }: Props) {
   }
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-50">
+    <div className="min-h-screen bg-slate-50">
       <MobileTopbar
         organizationName={session.user.organizationName || APP_NAME}
         onOpen={() => setMobileOpen(true)}
@@ -107,7 +107,7 @@ export default function DashboardLayout({ children }: Props) {
           <SidebarContent pathname={pathname} session={session} />
         </aside>
 
-        <div className="min-w-0 flex-1 lg:pl-72 flex flex-col h-screen">
+        <div className="min-w-0 flex-1 lg:pl-72 flex flex-col">
           <header className="sticky top-0 z-30 hidden items-center justify-between border-b bg-white/90 px-6 py-4 backdrop-blur lg:flex">
             <div>
               <p className="text-sm text-slate-500">Workspace</p>
@@ -134,7 +134,7 @@ export default function DashboardLayout({ children }: Props) {
             </div>
           </header>
 
-          <main className="flex-1 overflow-y-auto p-4 pb-32 pt-20 sm:p-6 sm:pt-24 lg:pt-6">
+          <main className="p-4 pb-32 pt-20 sm:p-6 sm:pt-24 lg:pt-6">
             {children}
           </main>
 

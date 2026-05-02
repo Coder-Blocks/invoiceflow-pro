@@ -432,3 +432,24 @@ body {
 main {
   min-height: 100vh;
 }
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  height: auto !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  position: static !important;
+  touch-action: pan-y !important;
+}
+
+body {
+  overscroll-behavior-y: auto !important;
+}
+
+/* 🔧 SCROLL FIX – only line changed: overflow-y from visible to auto */
+main {
+  min-height: 100vh;
+  overflow-y: auto !important;  /* ✅ was: overflow-y: visible !important; */
+}
