@@ -21,14 +21,14 @@ type ParsedMedicineItem = {
   billFileUrl: string;
 };
 
+function cleanLine(line: string): string {
+  return line.replace(/\s+/g, " ").trim();
+}
+
 function toNumber(value: string | number | undefined | null): number {
   const cleaned = String(value ?? "").replace(/[^\d.]/g, "");
   const num = Number(cleaned);
   return Number.isFinite(num) ? num : 0;
-}
-
-function cleanLine(line: string): string {
-  return line.replace(/\s+/g, " ").trim();
 }
 
 function normalizeExpiry(value: string): string {
@@ -78,9 +78,9 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
 function extractVendorName(text: string): string {
   const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
 
-  const gstIndex = lines.findIndex((l) => /GST INVOICE/i.test(l));
-  if (gstIndex >= 0) {
-    for (let i = gstIndex + 1; i < Math.min(gstIndex + 10, lines.length); i++) {
+  const gstInvoiceIndex = lines.findIndex((l) => /GST INVOICE/i.test(l));
+  if (gstInvoiceIndex >= 0) {
+    for (let i = gstInvoiceIndex + 1; i < Math.min(gstInvoiceIndex + 10, lines.length); i++) {
       const line = lines[i];
       if (
         line &&
@@ -119,6 +119,8 @@ function isAmountOnlyLine(line: string): boolean {
 }
 
 function looksLikeDetailLine(line: string): boolean {
+  // example:
+  // 1 0.00 ARISTO PHA CD25626 05/27 201.56 153.57 30042019 5 5.00 153.19
   const parts = line.split(/\s+/);
   const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
   if (expIndex < 2) return false;
@@ -129,7 +131,7 @@ function looksLikeDetailLine(line: string): boolean {
   return /^\d{8}$/.test(tail[2] || "");
 }
 
-function parseDetailFromRight(line: string) {
+function parseDetailLine(line: string) {
   const parts = line.split(/\s+/);
   const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
   if (expIndex < 2) return null;
@@ -138,102 +140,63 @@ function parseDetailFromRight(line: string) {
   if (tail.length < 6) return null;
   if (!/^\d{8}$/.test(tail[2] || "")) return null;
 
-  const prefix = parts.slice(0, expIndex - 1).join(" ").trim();
-  const batchNumber = parts[expIndex - 1];
-  const expiryDate = normalizeExpiry(parts[expIndex]);
-  const mrp = toNumber(tail[0]);
-  const purchasePrice = toNumber(tail[1]);
-  const gstPercent = toNumber(tail[3]);
-  const discountPercent = toNumber(tail[4]);
-  const value = toNumber(tail[5]);
-
   return {
-    prefix,
-    batchNumber,
-    expiryDate,
-    mrp,
-    purchasePrice,
-    gstPercent,
-    discountPercent,
-    value,
+    batchNumber: parts[expIndex - 1],
+    expiryDate: normalizeExpiry(parts[expIndex]),
+    mrp: toNumber(tail[0]),
+    purchasePrice: toNumber(tail[1]),
+    gstPercent: toNumber(tail[3]),
+    discountPercent: toNumber(tail[4]),
+    value: toNumber(tail[5]),
   };
 }
 
-function cleanupDescriptionText(text: string): string {
-  return text
-    .replace(/\|\s*[\d.]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function cleanupDescription(text: string): string {
+  return text.replace(/\|\s*[\d.]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function extractQtyPackMedicineFromDescription(raw: string) {
-  const cleaned = cleanupDescriptionText(raw);
-
+function parseDescriptionBlock(descLines: string[]) {
+  const text = cleanupDescription(descLines.join(" "));
+  // examples:
+  // 1.00 30ML MONOCEF O CV 100 SYR
+  // 6.00 0.00 10 PCS CIPZEN D TAB
+  // 30.00 200 ML PROLYTE ORS APPLE LIQUID 200 ML
+  let medicineName = text;
   let quantity = 0;
   let pack = "";
-  let medicineName = cleaned;
 
-  const qtyMatch = cleaned.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
+  const qtyMatch = medicineName.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
   if (qtyMatch) {
     quantity = toNumber(qtyMatch[1]);
     medicineName = qtyMatch[2].trim();
   }
 
+  // sometimes second token is free qty like 0.00
+  const freeQtyMatch = medicineName.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
+  if (freeQtyMatch && toNumber(freeQtyMatch[1]) <= quantity) {
+    medicineName = freeQtyMatch[2].trim();
+  }
+
   const packStartMatch = medicineName.match(
-    /^((?:\d+[A-Z]+)|(?:\d+(?:\.\d+)?\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT)))\s+(.+)$/i
+    /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))\s+(.+)$/i
   );
   if (packStartMatch) {
     pack = packStartMatch[1].trim();
     medicineName = packStartMatch[2].trim();
+  } else {
+    const packInlineMatch = medicineName.match(
+      /^((?:\d+(?:\.\d+)?)\s+[A-Z]+)\s+(.+)$/i
+    );
+    if (packInlineMatch) {
+      pack = packInlineMatch[1].trim();
+      medicineName = packInlineMatch[2].trim();
+    }
   }
 
   return {
     quantity,
     pack,
     medicineName: medicineName.trim(),
-  };
-}
-
-function extractInlineCombined(prefix: string) {
-  let cleaned = cleanupDescriptionText(prefix);
-
-  const serialMatch = cleaned.match(/^(\d+)\s+(.*)$/);
-  if (serialMatch) {
-    cleaned = serialMatch[2];
-  }
-
-  const qtyMatch = cleaned.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-  const quantity = qtyMatch ? toNumber(qtyMatch[1]) : 0;
-  cleaned = qtyMatch ? qtyMatch[2] : cleaned;
-
-  const freeMatch = cleaned.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-  if (freeMatch) {
-    cleaned = freeMatch[2];
-  }
-
-  let manufacturer = "";
-  const tokens = cleaned.split(/\s+/);
-
-  if (tokens.length >= 3) {
-    const lastTwo = tokens.slice(-2).join(" ");
-    const lastOne = tokens.slice(-1).join(" ");
-
-    if (/^[A-Z][A-Z0-9().&/-]*\s+[A-Z][A-Z0-9().&/-]*$/i.test(lastTwo)) {
-      manufacturer = lastTwo;
-      cleaned = tokens.slice(0, -2).join(" ");
-    } else if (/^[A-Z][A-Z0-9().&/-]*$/i.test(lastOne)) {
-      manufacturer = lastOne;
-      cleaned = tokens.slice(0, -1).join(" ");
-    }
-  }
-
-  const extracted = extractQtyPackMedicineFromDescription(`${quantity} ${cleaned}`);
-
-  return {
-    quantity: extracted.quantity || quantity,
-    pack: extracted.pack,
-    medicineName: extracted.medicineName,
-    manufacturer,
   };
 }
 
@@ -255,41 +218,26 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
     if (isAmountOnlyLine(line)) continue;
 
     if (looksLikeDetailLine(line)) {
-      const detail = parseDetailFromRight(line);
+      const detail = parseDetailLine(line);
       if (!detail) {
         descBuffer = [];
         continue;
       }
 
-      let quantity = 0;
-      let pack = "";
-      let medicineName = "";
+      const parsedDesc = parseDescriptionBlock(descBuffer);
 
-      if (descBuffer.length > 0) {
-        const descText = descBuffer.join(" ");
-        const extracted = extractQtyPackMedicineFromDescription(descText);
-        quantity = extracted.quantity;
-        pack = extracted.pack;
-        medicineName = extracted.medicineName;
-      } else {
-        const inline = extractInlineCombined(detail.prefix);
-        quantity = inline.quantity;
-        pack = inline.pack;
-        medicineName = inline.medicineName;
-      }
-
-      if (medicineName) {
+      if (parsedDesc.medicineName) {
         items.push({
-          medicineName,
+          medicineName: parsedDesc.medicineName,
           batchNumber: detail.batchNumber,
           expiryDate: detail.expiryDate,
-          quantity,
+          quantity: parsedDesc.quantity,
           purchasePrice: detail.purchasePrice,
           sellingPrice: detail.mrp || detail.purchasePrice,
           vendorName,
           invoiceNumber,
           invoiceDate,
-          pack,
+          pack: parsedDesc.pack,
           mrp: detail.mrp,
           gstPercent: detail.gstPercent,
           discountPercent: detail.discountPercent,
