@@ -6,12 +6,9 @@ import { Toaster } from "sonner";
 
 export const metadata = {
   title: "InvoiceFlow Pro",
-  description: "Smart Billing SaaS",
-  icons: {
-    icon: "/logo.png",
-    shortcut: "/logo.png",
-    apple: "/logo.png",
-  },
+  description: "Smart billing SaaS for Indian small businesses",
+  manifest: "/manifest.json",
+  themeColor: "#2563eb",
 };
 
 export default function RootLayout({
