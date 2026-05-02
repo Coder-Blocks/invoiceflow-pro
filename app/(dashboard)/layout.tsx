@@ -78,7 +78,7 @@ export default function DashboardLayout({ children }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen overflow-y-auto bg-slate-50">
       <MobileTopbar
         organizationName={session.user.organizationName || APP_NAME}
         onOpen={() => setMobileOpen(true)}
@@ -134,7 +134,7 @@ export default function DashboardLayout({ children }: Props) {
             </div>
           </header>
 
-          <main className="p-4 pb-24 pt-20 sm:p-6 sm:pt-24 lg:pt-6">
+          <main className="min-h-screen overflow-y-auto p-4 pb-32 pt-20 sm:p-6 sm:pt-24 lg:pb-6 lg:pt-6">
             {children}
           </main>
 

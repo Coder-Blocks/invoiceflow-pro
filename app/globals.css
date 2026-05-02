@@ -414,3 +414,21 @@ body {
     color: #ff4d4d;
   }
 }
+
+html,
+body {
+  height: auto;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body {
+  position: relative;
+  overscroll-behavior-y: contain;
+}
+
+#__next,
+main {
+  min-height: 100vh;
+}
