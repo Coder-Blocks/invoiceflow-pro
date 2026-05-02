@@ -171,7 +171,6 @@ export default function MedicalStockPage() {
           ? {
               ...row,
               [field]: value,
-              billFileUrl: field === "billFileUrl" ? String(value) : row.billFileUrl || billFileUrl,
             }
           : row
       )
@@ -189,157 +188,118 @@ export default function MedicalStockPage() {
     });
   };
 
-  const applyBillUrlToAllRows = (url: string) => {
-    setRows((prev) => prev.map((row) => ({ ...row, billFileUrl: url })));
+  const replaceRowsWithParsedOrKeepManual = (
+    parsedItems: Partial<MedicineRow>[],
+    url: string
+  ) => {
+    if (Array.isArray(parsedItems) && parsedItems.length > 0) {
+      const parsedRows: MedicineRow[] = parsedItems.map((item) => ({
+        id: crypto.randomUUID(),
+        medicineName: item.medicineName || "",
+        batchNumber: item.batchNumber || "",
+        expiryDate: item.expiryDate || "",
+        quantity: item.quantity ?? "",
+        purchasePrice: item.purchasePrice ?? "",
+        sellingPrice: item.sellingPrice ?? "",
+        vendorName: item.vendorName || "",
+        billFileUrl: url,
+        invoiceNumber: item.invoiceNumber || "",
+        invoiceDate: item.invoiceDate || "",
+        pack: item.pack || "",
+        mrp: item.mrp ?? "",
+        gstPercent: item.gstPercent ?? "",
+        discountPercent: item.discountPercent ?? "",
+        value: item.value ?? "",
+      }));
+      setRows(parsedRows);
+      return parsedRows;
+    }
+
+    setRows((prev) =>
+      prev.map((row) => ({
+        ...row,
+        billFileUrl: url,
+      }))
+    );
+    return null;
   };
 
-  const replaceRowsWithParsedOrKeepManual = (parsedItems: Partial<MedicineRow>[], url: string) => {
-  if (Array.isArray(parsedItems) && parsedItems.length > 0) {
-    const parsedRows: MedicineRow[] = parsedItems.map((item) => ({
-      id: crypto.randomUUID(),
-      medicineName: item.medicineName || "",
-      batchNumber: item.batchNumber || "",
-      expiryDate: item.expiryDate || "",
-      quantity: item.quantity ?? "",
-      purchasePrice: item.purchasePrice ?? "",
-      sellingPrice: item.sellingPrice ?? "",
-      vendorName: item.vendorName || "",
-      billFileUrl: url,
-      invoiceNumber: item.invoiceNumber || "",
-      invoiceDate: item.invoiceDate || "",
-      pack: item.pack || "",
-      mrp: item.mrp ?? "",
-      gstPercent: item.gstPercent ?? "",
-      discountPercent: item.discountPercent ?? "",
-      value: item.value ?? "",
-    }));
-    setRows(parsedRows);
-    return parsedRows;
-  }
+  const downloadExcel = async (excelBase64?: string, excelFileName?: string) => {
+    if (!excelBase64) return;
 
-  setRows((prev) =>
-    prev.map((row) => ({
-      ...row,
-      billFileUrl: url,
-    }))
-  );
-  return null;
-};
+    const binary = atob(excelBase64);
+    const bytes = new Uint8Array(binary.length);
 
-  const downloadExcel = async (
-  directExcelUrl?: string,
-  rowsToExport?: MedicineRow[],
-  customBillUrl?: string
-) => {
-  if (directExcelUrl) {
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    const blob = new Blob([bytes], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = directExcelUrl;
-    a.download = "";
+    a.href = url;
+    a.download = excelFileName || `medical-stock-${Date.now()}.xlsx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    return;
-  }
-
-  const usableRows = sanitizeRows(rowsToExport || rows, customBillUrl || billFileUrl);
-
-  const exportRows =
-    usableRows.length > 0
-      ? usableRows.map((row: any) => ({
-          "Vendor Name": row.vendorName || "",
-          "Invoice Number": row.invoiceNumber || "",
-          "Invoice Date": row.invoiceDate || "",
-          "Medicine Name": row.medicineName,
-          Pack: row.pack || "",
-          "Batch Number": row.batchNumber,
-          "Expiry Date": row.expiryDate,
-          Quantity: row.quantity,
-          MRP: row.mrp || "",
-          "Purchase Price": row.purchasePrice,
-          "Selling Price": row.sellingPrice,
-          "GST %": row.gstPercent || "",
-          "Discount %": row.discountPercent || "",
-          Value: row.value || "",
-          "Bill File URL": row.billFileUrl || "",
-        }))
-      : [
-          {
-            "Vendor Name": "",
-            "Invoice Number": "",
-            "Invoice Date": "",
-            "Medicine Name": "",
-            Pack: "",
-            "Batch Number": "",
-            "Expiry Date": "",
-            Quantity: "",
-            MRP: "",
-            "Purchase Price": "",
-            "Selling Price": "",
-            "GST %": "",
-            "Discount %": "",
-            Value: "",
-            "Bill File URL": customBillUrl || billFileUrl || "",
-          },
-        ];
-
-  const worksheet = XLSX.utils.json_to_sheet(exportRows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Medical Stock");
-  XLSX.writeFile(workbook, `medical-stock-${Date.now()}.xlsx`);
-};
+    URL.revokeObjectURL(url);
+  };
 
   const handleUpload = async (file: File) => {
-  setUploading(true);
-  setError("");
-  setMessage("");
-  setParseStatus("");
+    setUploading(true);
+    setError("");
+    setMessage("");
+    setParseStatus("");
 
-  try {
-    const formData = new FormData();
-    formData.append("file", file);
+    try {
+      const localPreviewUrl = URL.createObjectURL(file);
 
-    const res = await fetch("/api/medical-stock/upload", {
-      method: "POST",
-      body: formData,
-    });
+      const formData = new FormData();
+      formData.append("file", file);
 
-    const data = await res.json();
+      const res = await fetch("/api/medical-stock/upload", {
+        method: "POST",
+        body: formData,
+      });
 
-    if (!res.ok) {
-      throw new Error(data?.error || "Upload failed");
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Upload failed");
+      }
+
+      const parsedItems = Array.isArray(data?.parsedItems) ? data.parsedItems : [];
+      const fileKind = data?.fileKind || "unknown";
+      const excelBase64 = data?.excelBase64 || "";
+      const excelFileName = data?.excelFileName || "";
+
+      setBillFileUrl(localPreviewUrl);
+      setBillFileKind(fileKind);
+      setLastUploadName(file.name);
+      setParseStatus(data?.message || "Bill uploaded successfully.");
+
+      replaceRowsWithParsedOrKeepManual(parsedItems, file.name);
+
+      await downloadExcel(excelBase64, excelFileName);
+
+      setMessage(
+        parsedItems.length > 0
+          ? "Bill uploaded, medicines parsed, and Excel downloaded successfully."
+          : "Bill uploaded safely. Parsing failed, manual entry remains available."
+      );
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
-
-    const uploadedUrl = data?.fileUrl || "";
-    const parsedItems = Array.isArray(data?.parsedItems) ? data.parsedItems : [];
-    const fileKind = data?.fileKind || "unknown";
-    const excelUrl = data?.excelUrl || "";
-
-    setBillFileUrl(uploadedUrl);
-    setBillFileKind(fileKind);
-    setLastUploadName(file.name);
-    setParseStatus(data?.message || "Bill uploaded successfully.");
-
-    applyBillUrlToAllRows(uploadedUrl);
-
-    const replacedRows = replaceRowsWithParsedOrKeepManual(parsedItems, uploadedUrl);
-
-    await downloadExcel(excelUrl, replacedRows || undefined, uploadedUrl);
-
-    setMessage(
-      parsedItems.length > 0
-        ? "Bill uploaded, parsed, and Excel downloaded successfully."
-        : "Bill uploaded safely. Parsing failed, manual entry remains available, and Excel template downloaded."
-    );
-  } catch (err) {
-    console.error(err);
-    setError(err instanceof Error ? err.message : "Upload failed");
-  } finally {
-    setUploading(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  }
-};
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -385,10 +345,58 @@ export default function MedicalStockPage() {
     handleUpload(file);
   };
 
+  const handleManualExcelDownload = () => {
+    const usableRows = sanitizeRows(rows, billFileUrl);
+
+    const exportRows =
+      usableRows.length > 0
+        ? usableRows.map((row: any) => ({
+            "Vendor Name": row.vendorName || "",
+            "Invoice Number": row.invoiceNumber || "",
+            "Invoice Date": row.invoiceDate || "",
+            "Medicine Name": row.medicineName,
+            Pack: row.pack || "",
+            "Batch Number": row.batchNumber,
+            "Expiry Date": row.expiryDate,
+            Quantity: row.quantity,
+            MRP: row.mrp || "",
+            "Purchase Price": row.purchasePrice,
+            "Selling Price": row.sellingPrice,
+            "GST %": row.gstPercent || "",
+            "Discount %": row.discountPercent || "",
+            Value: row.value || "",
+            "Bill File URL": row.billFileUrl || "",
+          }))
+        : [
+            {
+              "Vendor Name": "",
+              "Invoice Number": "",
+              "Invoice Date": "",
+              "Medicine Name": "",
+              Pack: "",
+              "Batch Number": "",
+              "Expiry Date": "",
+              Quantity: "",
+              MRP: "",
+              "Purchase Price": "",
+              "Selling Price": "",
+              "GST %": "",
+              "Discount %": "",
+              Value: "",
+              "Bill File URL": billFileUrl || "",
+            },
+          ];
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Medical Stock");
+    XLSX.writeFile(workbook, `medical-stock-${Date.now()}.xlsx`);
+  };
+
   const previewBlock = useMemo(() => {
     if (!billFileUrl) return null;
 
-    if (billFileKind === "pdf" || billFileUrl.toLowerCase().endsWith(".pdf")) {
+    if (billFileKind === "pdf") {
       return (
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -402,46 +410,48 @@ export default function MedicalStockPage() {
               View Uploaded Bill
             </a>
           </div>
-
           <div className="overflow-hidden rounded-xl border border-slate-200">
             <iframe
               src={billFileUrl}
               title="PDF Preview"
-              className="h-125 w-full bg-white"
+              className="h-[500px] w-full bg-white"
             />
           </div>
         </div>
       );
     }
 
-    return (
-      <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-slate-800">Image Bill Preview</h3>
-          <a
-            href={billFileUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-          >
-            View Uploaded Bill
-          </a>
+    if (billFileKind === "image") {
+      return (
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-800">Image Bill Preview</h3>
+            <a
+              href={billFileUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              View Uploaded Bill
+            </a>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <img
+              src={billFileUrl}
+              alt="Uploaded Bill"
+              className="max-h-[500px] w-full rounded-lg object-contain"
+            />
+          </div>
         </div>
+      );
+    }
 
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <img
-            src={billFileUrl}
-            alt="Uploaded Bill"
-            className="max-h-125 w-full rounded-lg object-contain"
-          />
-        </div>
-      </div>
-    );
+    return null;
   }, [billFileKind, billFileUrl]);
 
   return (
     <div className="space-y-6 p-4 md:p-6">
-      <div className="rounded-3xl bg-linear-to-r from-cyan-600 to-blue-700 p-6 text-white shadow-lg">
+      <div className="rounded-3xl bg-gradient-to-r from-cyan-600 to-blue-700 p-6 text-white shadow-lg">
         <h1 className="text-2xl font-bold md:text-3xl">Medical Stock Module</h1>
         <p className="mt-2 text-sm text-cyan-50 md:text-base">
           Manual medicine stock entry, bill upload, safe PDF/image preview, low stock
@@ -488,7 +498,7 @@ export default function MedicalStockPage() {
 
                 <button
                   type="button"
-                  onClick={() => downloadExcel()}
+                  onClick={handleManualExcelDownload}
                   className="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700"
                 >
                   Download Excel
@@ -501,9 +511,7 @@ export default function MedicalStockPage() {
                 <p>
                   <span className="font-semibold">Last Uploaded File:</span> {lastUploadName}
                 </p>
-                {parseStatus ? (
-                  <p className="mt-1 text-slate-500">{parseStatus}</p>
-                ) : null}
+                {parseStatus ? <p className="mt-1 text-slate-500">{parseStatus}</p> : null}
               </div>
             ) : null}
 
@@ -540,15 +548,20 @@ export default function MedicalStockPage() {
             </div>
 
             <div className="overflow-x-auto rounded-2xl border border-slate-200">
-              <table className="min-w-300 w-full text-sm">
+              <table className="min-w-[1450px] w-full text-sm">
                 <thead className="bg-slate-100 text-slate-700">
                   <tr>
                     <th className="px-3 py-3 text-left font-semibold">Medicine Name</th>
+                    <th className="px-3 py-3 text-left font-semibold">Pack</th>
                     <th className="px-3 py-3 text-left font-semibold">Batch Number</th>
                     <th className="px-3 py-3 text-left font-semibold">Expiry Date</th>
                     <th className="px-3 py-3 text-left font-semibold">Quantity</th>
+                    <th className="px-3 py-3 text-left font-semibold">MRP</th>
                     <th className="px-3 py-3 text-left font-semibold">Purchase Price</th>
                     <th className="px-3 py-3 text-left font-semibold">Selling Price</th>
+                    <th className="px-3 py-3 text-left font-semibold">GST %</th>
+                    <th className="px-3 py-3 text-left font-semibold">Discount %</th>
+                    <th className="px-3 py-3 text-left font-semibold">Value</th>
                     <th className="px-3 py-3 text-left font-semibold">Vendor Name</th>
                     <th className="px-3 py-3 text-left font-semibold">Warnings</th>
                     <th className="px-3 py-3 text-left font-semibold">Action</th>
@@ -564,11 +577,19 @@ export default function MedicalStockPage() {
                           <input
                             type="text"
                             value={row.medicineName}
-                            onChange={(e) =>
-                              handleRowChange(row.id, "medicineName", e.target.value)
-                            }
-                            placeholder="Paracetamol 650"
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-blue-500"
+                            onChange={(e) => handleRowChange(row.id, "medicineName", e.target.value)}
+                            placeholder="Medicine Name"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+                          />
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <input
+                            type="text"
+                            value={row.pack || ""}
+                            onChange={(e) => handleRowChange(row.id, "pack", e.target.value)}
+                            placeholder="Pack"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
                           />
                         </td>
 
@@ -576,11 +597,9 @@ export default function MedicalStockPage() {
                           <input
                             type="text"
                             value={row.batchNumber}
-                            onChange={(e) =>
-                              handleRowChange(row.id, "batchNumber", e.target.value)
-                            }
-                            placeholder="BCH-001"
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-blue-500"
+                            onChange={(e) => handleRowChange(row.id, "batchNumber", e.target.value)}
+                            placeholder="Batch Number"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
                           />
                         </td>
 
@@ -588,10 +607,8 @@ export default function MedicalStockPage() {
                           <input
                             type="date"
                             value={row.expiryDate}
-                            onChange={(e) =>
-                              handleRowChange(row.id, "expiryDate", e.target.value)
-                            }
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-blue-500"
+                            onChange={(e) => handleRowChange(row.id, "expiryDate", e.target.value)}
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
                           />
                         </td>
 
@@ -600,11 +617,21 @@ export default function MedicalStockPage() {
                             type="number"
                             min="0"
                             value={row.quantity}
-                            onChange={(e) =>
-                              handleRowChange(row.id, "quantity", e.target.value)
-                            }
+                            onChange={(e) => handleRowChange(row.id, "quantity", e.target.value)}
                             placeholder="0"
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-blue-500"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+                          />
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={row.mrp || ""}
+                            onChange={(e) => handleRowChange(row.id, "mrp", e.target.value)}
+                            placeholder="MRP"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
                           />
                         </td>
 
@@ -614,11 +641,9 @@ export default function MedicalStockPage() {
                             min="0"
                             step="0.01"
                             value={row.purchasePrice}
-                            onChange={(e) =>
-                              handleRowChange(row.id, "purchasePrice", e.target.value)
-                            }
-                            placeholder="0.00"
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-blue-500"
+                            onChange={(e) => handleRowChange(row.id, "purchasePrice", e.target.value)}
+                            placeholder="Purchase Price"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
                           />
                         </td>
 
@@ -628,11 +653,45 @@ export default function MedicalStockPage() {
                             min="0"
                             step="0.01"
                             value={row.sellingPrice}
-                            onChange={(e) =>
-                              handleRowChange(row.id, "sellingPrice", e.target.value)
-                            }
-                            placeholder="0.00"
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-blue-500"
+                            onChange={(e) => handleRowChange(row.id, "sellingPrice", e.target.value)}
+                            placeholder="Selling Price"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+                          />
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={row.gstPercent || ""}
+                            onChange={(e) => handleRowChange(row.id, "gstPercent", e.target.value)}
+                            placeholder="GST %"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+                          />
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={row.discountPercent || ""}
+                            onChange={(e) => handleRowChange(row.id, "discountPercent", e.target.value)}
+                            placeholder="Discount %"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+                          />
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={row.value || ""}
+                            onChange={(e) => handleRowChange(row.id, "value", e.target.value)}
+                            placeholder="Value"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
                           />
                         </td>
 
@@ -640,11 +699,9 @@ export default function MedicalStockPage() {
                           <input
                             type="text"
                             value={row.vendorName}
-                            onChange={(e) =>
-                              handleRowChange(row.id, "vendorName", e.target.value)
-                            }
+                            onChange={(e) => handleRowChange(row.id, "vendorName", e.target.value)}
                             placeholder="Vendor Name"
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-blue-500"
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
                           />
                         </td>
 
@@ -704,7 +761,7 @@ export default function MedicalStockPage() {
                 </a>
                 <button
                   type="button"
-                  onClick={() => downloadExcel()}
+                  onClick={handleManualExcelDownload}
                   className="rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
                 >
                   Download Excel Again
@@ -730,10 +787,12 @@ export default function MedicalStockPage() {
                   Low Stock Items
                 </p>
                 <p className="mt-1 text-2xl font-bold text-amber-900">
-                  {warnings.filter((w, i) => {
-                    const qty = toNumber(rows[i]?.quantity ?? 0);
-                    return qty > 0 && qty < LOW_STOCK_THRESHOLD;
-                  }).length}
+                  {
+                    warnings.filter((w, i) => {
+                      const qty = toNumber(rows[i]?.quantity ?? 0);
+                      return qty > 0 && qty < LOW_STOCK_THRESHOLD;
+                    }).length
+                  }
                 </p>
               </div>
 
@@ -742,9 +801,7 @@ export default function MedicalStockPage() {
                   Expired / Near Expiry
                 </p>
                 <p className="mt-1 text-2xl font-bold text-red-900">
-                  {
-                    warnings.filter((w) => w.expired || w.expiringSoon).length
-                  }
+                  {warnings.filter((w) => w.expired || w.expiringSoon).length}
                 </p>
               </div>
             </div>
@@ -762,7 +819,7 @@ export default function MedicalStockPage() {
               </button>
             </div>
 
-            <div className="max-h-175 space-y-3 overflow-y-auto">
+            <div className="max-h-[700px] space-y-3 overflow-y-auto">
               {loadingList ? (
                 <p className="text-sm text-slate-500">Loading...</p>
               ) : savedItems.length === 0 ? (

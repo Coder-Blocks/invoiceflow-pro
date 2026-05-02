@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs/promises";
-import path from "path";
-import { Prisma } from "@prisma/client";
 import * as XLSX from "xlsx";
 
 export const runtime = "nodejs";
-
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads", "medical-stock");
-const EXCEL_DIR = path.join(process.cwd(), "public", "uploads", "medical-stock", "excel");
 
 type ParsedMedicineItem = {
   medicineName: string;
@@ -27,23 +21,24 @@ type ParsedMedicineItem = {
   billFileUrl: string;
 };
 
-function slugifyFileName(name: string) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, "-");
-}
-
 function toNumber(value: string | number | undefined | null) {
-  const num = Number(String(value ?? "").replace(/[^\d.]/g, ""));
+  const cleaned = String(value ?? "").replace(/[^\d.]/g, "");
+  const num = Number(cleaned);
   return Number.isFinite(num) ? num : 0;
 }
 
 function normalizeExpiry(value: string) {
   const v = String(value || "").trim();
-  if (!v) return "";
   const mmYY = v.match(/^(\d{2})\/(\d{2})$/);
   if (mmYY) {
     const [, mm, yy] = mmYY;
     return `20${yy}-${mm}-01`;
   }
+  return "";
+}
+
+function normalizeInvoiceDate(value: string) {
+  const v = String(value || "").trim();
   const ddmmyyyy = v.match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (ddmmyyyy) {
     const [, dd, mm, yyyy] = ddmmyyyy;
@@ -77,157 +72,147 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
 }
 
 function extractVendorName(text: string) {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const match =
+    text.match(/GST INVOICE[\s\S]{0,500}?\n([A-Z0-9\s().,&/-]{8,})\n/i) ||
+    text.match(/\n([A-Z0-9\s().,&/-]{8,}PVT LTD)\n/i) ||
+    text.match(/\n([A-Z0-9\s().,&/-]{8,}LIMITED)\n/i);
 
-  const invoiceIndex = lines.findIndex((l) =>
-    /GST INVOICE/i.test(l)
-  );
-
-  if (invoiceIndex >= 0) {
-    for (let i = invoiceIndex + 1; i < Math.min(invoiceIndex + 8, lines.length); i++) {
-      const line = lines[i];
-      if (
-        line &&
-        !/Page|Food Lic|Bank|Account|IFSC|CIN|MSME|Duplicate Copy|A UNIT OF/i.test(line)
-      ) {
-        return line;
-      }
-    }
-  }
-
-  const capsLine = lines.find(
-    (l) =>
-      /^[A-Z0-9\s.&()/-]{8,}$/.test(l) &&
-      !/GST INVOICE|DUPLICATE COPY|PAGE/i.test(l)
-  );
-
-  return capsLine || "";
+  return match?.[1]?.replace(/\s+/g, " ").trim() || "";
 }
 
 function extractInvoiceNumber(text: string) {
-  const match = text.match(/INV NO\.\s*:\s*([A-Z0-9\-\/]+)/i);
+  const match = text.match(/INV NO\.\s*:\s*([A-Z0-9/-]+)/i);
   return match?.[1]?.trim() || "";
 }
 
 function extractInvoiceDate(text: string) {
   const match = text.match(/INV DT\.\s*:\s*(\d{2}-\d{2}-\d{4})/i);
-  if (!match?.[1]) return "";
-  const [dd, mm, yyyy] = match[1].split("-");
-  return `${yyyy}-${mm}-${dd}`;
+  return normalizeInvoiceDate(match?.[1] || "");
 }
 
-function cleanMedicineName(name: string) {
-  return name
-    .replace(/\|\s*[\d.]+$/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+function isNoiseLine(line: string) {
+  return (
+    !line ||
+    /GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO/i.test(
+      line
+    )
+  );
+}
+
+function looksLikeDetailLine(line: string) {
+  return /^\d+\s+[\d.]+\s+[\d.]+\s+.+\s+[A-Z0-9-]+\s+\d{2}\/\d{2}\s+[\d.]+\s+[\d.]+\s+\d{8}\s+[\d.]+\s+[\d.]+\s+[\d.]+$/i.test(
+    line
+  );
+}
+
+function derivePackAndMedicine(source: string) {
+  let text = source.replace(/\|\s*[\d.]+/g, "").replace(/\s+/g, " ").trim();
+  text = text.replace(/^[\d.]+\s+/, "").trim();
+
+  const packMatch = text.match(
+    /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))\s+(.+)$/i
+  );
+
+  if (packMatch) {
+    return {
+      pack: packMatch[1].trim(),
+      medicineName: packMatch[2].trim(),
+    };
+  }
+
+  return {
+    pack: "",
+    medicineName: text.trim(),
+  };
 }
 
 function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedicineItem[] {
-  if (!text.trim()) return [];
-
   const vendorName = extractVendorName(text);
   const invoiceNumber = extractInvoiceNumber(text);
   const invoiceDate = extractInvoiceDate(text);
 
-  const lines = text
+  const rawLines = text
     .split(/\r?\n/)
-    .map((l) => l.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+    .map((l) => l.replace(/\s+/g, " ").trim());
+
+  const lines = rawLines.filter(Boolean);
 
   const items: ParsedMedicineItem[] = [];
+  let pendingDescription: string[] = [];
 
-  for (let i = 0; i < lines.length; i++) {
-    const current = lines[i];
-    const next = lines[i + 1] || "";
-
-    const rowPattern = new RegExp(
-      [
-        "^",
-        "(\\d+)",                         // sr
-        "\\s+([\\d.]+)",                  // qty
-        "\\s+([\\d.]+)",                  // sch/fqty maybe
-        "\\s+(.+?)",                      // product + maybe pack
-        "\\s+([A-Z0-9\\-]+)",             // mfg/batch edge
-        "\\s+([A-Z0-9\\-/]+)",            // batch
-        "\\s+(\\d{2}/\\d{2})",            // exp
-        "\\s+([\\d.]+)",                  // mrp
-        "\\s+([\\d.]+)",                  // rate
-        "\\s+(\\d{8})",                   // hsn
-        "\\s+([\\d.]+)",                  // gst
-        "\\s+([\\d.]+)",                  // dis
-        "\\s+([\\d.]+)",                  // value
-        "$",
-      ].join(""),
-      "i"
-    );
-
-    const m = current.match(rowPattern);
-
-    if (!m) continue;
-
-    const qty = toNumber(m[2]);
-    const productChunk = m[4];
-    const batchNumber = m[6];
-    const expiryDate = normalizeExpiry(m[7]);
-    const mrp = toNumber(m[8]);
-    const purchasePrice = toNumber(m[9]);
-    const gstPercent = toNumber(m[11]);
-    const discountPercent = toNumber(m[12]);
-    const value = toNumber(m[13]);
-
-    let medicineName = cleanMedicineName(productChunk);
-    let pack = "";
-
-    const packMatch = medicineName.match(
-      /^(.+?)\s+((?:\d+(?:\.\d+)?\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER))+)$/i
-    );
-
-    if (packMatch) {
-      medicineName = packMatch[1].trim();
-      pack = packMatch[2].trim();
+  for (const line of lines) {
+    if (isNoiseLine(line)) {
+      continue;
     }
 
-    if (
-      next &&
-      !/^\d+\s+[\d.]+\s+[\d.]+\s+/.test(next) &&
-      !/Gross Value|Net Value|GST Value|Total Items|Amount In Words/i.test(next)
-    ) {
-      medicineName = `${medicineName} ${next}`.replace(/\s+/g, " ").trim();
-      i += 1;
+    if (looksLikeDetailLine(line)) {
+      const detailMatch = line.match(
+        /^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+?)\s+([A-Z0-9-]+)\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/i
+      );
+
+      if (!detailMatch) {
+        pendingDescription = [];
+        continue;
+      }
+
+      const qty = toNumber(detailMatch[2]);
+      const inlineLeft = detailMatch[4].trim();
+      const batchNumber = detailMatch[5].trim();
+      const expiryDate = normalizeExpiry(detailMatch[6]);
+      const mrp = toNumber(detailMatch[7]);
+      const purchasePrice = toNumber(detailMatch[8]);
+      const gstPercent = toNumber(detailMatch[10]);
+      const discountPercent = toNumber(detailMatch[11]);
+      const value = toNumber(detailMatch[12]);
+
+      const descriptionSource =
+        pendingDescription
+          .filter((x) => !/^\|\s*[\d.]+$/.test(x))
+          .join(" ")
+          .trim() || inlineLeft;
+
+      const { pack, medicineName } = derivePackAndMedicine(descriptionSource);
+
+      items.push({
+        medicineName,
+        batchNumber,
+        expiryDate,
+        quantity: qty,
+        purchasePrice,
+        sellingPrice: mrp || purchasePrice,
+        vendorName,
+        invoiceNumber,
+        invoiceDate,
+        pack,
+        mrp,
+        gstPercent,
+        discountPercent,
+        value,
+        billFileUrl,
+      });
+
+      pendingDescription = [];
+      continue;
     }
 
-    items.push({
-      medicineName,
-      batchNumber,
-      expiryDate,
-      quantity: qty,
-      purchasePrice,
-      sellingPrice: mrp || purchasePrice,
-      vendorName,
-      invoiceNumber,
-      invoiceDate,
-      pack,
-      mrp,
-      gstPercent,
-      discountPercent,
-      value,
-      billFileUrl,
-    });
+    pendingDescription.push(line);
   }
 
-  const unique = items.filter((item, index, arr) => {
-    const key = `${item.medicineName}|${item.batchNumber}|${item.expiryDate}|${item.value}`;
-    return arr.findIndex((x) => `${x.medicineName}|${x.batchNumber}|${x.expiryDate}|${x.value}` === key) === index;
-  });
-
-  return unique;
+  return items.filter(
+    (item, index, arr) =>
+      item.medicineName &&
+      arr.findIndex(
+        (x) =>
+          x.medicineName === item.medicineName &&
+          x.batchNumber === item.batchNumber &&
+          x.expiryDate === item.expiryDate &&
+          x.value === item.value
+      ) === index
+  );
 }
 
-async function generateExcelFile(items: ParsedMedicineItem[], originalName: string) {
-  await fs.mkdir(EXCEL_DIR, { recursive: true });
-
-  const exportRows =
+function buildExcelBase64(items: ParsedMedicineItem[]) {
+  const rows =
     items.length > 0
       ? items.map((item) => ({
           "Vendor Name": item.vendorName,
@@ -246,42 +231,40 @@ async function generateExcelFile(items: ParsedMedicineItem[], originalName: stri
           Value: item.value,
           "Bill File URL": item.billFileUrl,
         }))
-      : [];
+      : [
+          {
+            "Vendor Name": "",
+            "Invoice Number": "",
+            "Invoice Date": "",
+            "Medicine Name": "",
+            Pack: "",
+            "Batch Number": "",
+            "Expiry Date": "",
+            Quantity: "",
+            MRP: "",
+            "Purchase Price": "",
+            "Selling Price": "",
+            "GST %": "",
+            "Discount %": "",
+            Value: "",
+            "Bill File URL": "",
+          },
+        ];
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(exportRows.length ? exportRows : [
-    {
-      "Vendor Name": "",
-      "Invoice Number": "",
-      "Invoice Date": "",
-      "Medicine Name": "",
-      Pack: "",
-      "Batch Number": "",
-      "Expiry Date": "",
-      Quantity: "",
-      MRP: "",
-      "Purchase Price": "",
-      "Selling Price": "",
-      "GST %": "",
-      "Discount %": "",
-      Value: "",
-      "Bill File URL": "",
-    },
-  ]);
-  XLSX.utils.book_append_sheet(wb, ws, "Medical Bill");
+  const ws = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, "Medical Stock");
 
-  const excelName = `${Date.now()}-${slugifyFileName(originalName.replace(/\.[^.]+$/, ""))}.xlsx`;
-  const excelPath = path.join(EXCEL_DIR, excelName);
-  XLSX.writeFile(wb, excelPath);
+  const buffer = XLSX.write(wb, {
+    type: "buffer",
+    bookType: "xlsx",
+  });
 
-  return `/uploads/medical-stock/excel/${excelName}`;
+  return buffer.toString("base64");
 }
 
 export async function POST(req: NextRequest) {
   try {
-    await fs.mkdir(UPLOAD_DIR, { recursive: true });
-    await fs.mkdir(EXCEL_DIR, { recursive: true });
-
     const formData = await req.formData();
     const file = formData.get("file");
 
@@ -289,8 +272,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
-    const originalName = file.name || "upload";
-    const lowerName = originalName.toLowerCase();
+    const lowerName = file.name.toLowerCase();
     const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
     const isImage = file.type.startsWith("image/");
 
@@ -304,45 +286,38 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    const storedName = `${Date.now()}-${slugifyFileName(originalName)}`;
-    const storedPath = path.join(UPLOAD_DIR, storedName);
-    await fs.writeFile(storedPath, buffer);
-
-    const billFileUrl = `/uploads/medical-stock/${storedName}`;
-
     let extractedText = "";
     if (isPdf) {
       extractedText = await extractTextFromPdf(buffer);
-    } else if (isImage) {
+    } else {
       extractedText = await extractTextFromImage(buffer);
     }
 
+    const billFileUrl = file.name;
     const parsedItems = extractedText
       ? parseMedicalInvoiceText(extractedText, billFileUrl)
       : [];
 
-    const excelUrl = await generateExcelFile(parsedItems, originalName);
-
-    const message =
-      parsedItems.length > 0
-        ? "Bill uploaded, parsed, and Excel generated successfully."
-        : "Bill uploaded safely. Parsing failed or unsupported format. Excel template still generated and manual entry can continue.";
+    const excelBase64 = buildExcelBase64(parsedItems);
 
     return NextResponse.json({
       success: true,
-      fileUrl: billFileUrl,
       fileKind: isPdf ? "pdf" : "image",
-      excelUrl,
+      originalFileName: file.name,
       parsedItems,
-      extractedText: extractedText ? extractedText.slice(0, 3000) : "",
-      message,
+      excelBase64,
+      excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
+      extractedText: extractedText.slice(0, 4000),
+      message:
+        parsedItems.length > 0
+          ? "Bill parsed successfully and Excel prepared."
+          : "Bill uploaded safely. Parsing failed, but manual entry and Excel template are available.",
     });
   } catch (error) {
     console.error("Medical stock upload error:", error);
     return NextResponse.json(
       {
-        error:
-          "Upload failed, but the module is safe. Please use manual entry and Excel download.",
+        error: "Upload failed while processing the bill.",
       },
       { status: 500 }
     );
