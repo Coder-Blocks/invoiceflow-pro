@@ -13,6 +13,13 @@ type MedicineRow = {
   sellingPrice: number | string;
   vendorName: string;
   billFileUrl?: string;
+  invoiceNumber?: string;
+  invoiceDate?: string;
+  pack?: string;
+  mrp?: number | string;
+  gstPercent?: number | string;
+  discountPercent?: number | string;
+  value?: number | string;
 };
 
 type SavedItem = {
@@ -40,6 +47,13 @@ const createEmptyRow = (): MedicineRow => ({
   sellingPrice: "",
   vendorName: "",
   billFileUrl: "",
+  invoiceNumber: "",
+  invoiceDate: "",
+  pack: "",
+  mrp: "",
+  gstPercent: "",
+  discountPercent: "",
+  value: "",
 });
 
 function toNumber(value: string | number) {
@@ -78,6 +92,13 @@ function sanitizeRows(rows: MedicineRow[], fallbackBillUrl?: string) {
       sellingPrice: toNumber(row.sellingPrice),
       vendorName: row.vendorName.trim(),
       billFileUrl: row.billFileUrl || fallbackBillUrl || "",
+      invoiceNumber: row.invoiceNumber || "",
+      invoiceDate: row.invoiceDate || "",
+      pack: row.pack || "",
+      mrp: toNumber(row.mrp || 0),
+      gstPercent: toNumber(row.gstPercent || 0),
+      discountPercent: toNumber(row.discountPercent || 0),
+      value: toNumber(row.value || 0),
     }))
     .filter(
       (row) =>
@@ -173,115 +194,152 @@ export default function MedicalStockPage() {
   };
 
   const replaceRowsWithParsedOrKeepManual = (parsedItems: Partial<MedicineRow>[], url: string) => {
-    if (Array.isArray(parsedItems) && parsedItems.length > 0) {
-      const parsedRows: MedicineRow[] = parsedItems.map((item) => ({
-        id: crypto.randomUUID(),
-        medicineName: item.medicineName || "",
-        batchNumber: item.batchNumber || "",
-        expiryDate: item.expiryDate || "",
-        quantity: item.quantity ?? "",
-        purchasePrice: item.purchasePrice ?? "",
-        sellingPrice: item.sellingPrice ?? "",
-        vendorName: item.vendorName || "",
-        billFileUrl: url,
-      }));
-      setRows(parsedRows);
-      return parsedRows;
-    }
+  if (Array.isArray(parsedItems) && parsedItems.length > 0) {
+    const parsedRows: MedicineRow[] = parsedItems.map((item) => ({
+      id: crypto.randomUUID(),
+      medicineName: item.medicineName || "",
+      batchNumber: item.batchNumber || "",
+      expiryDate: item.expiryDate || "",
+      quantity: item.quantity ?? "",
+      purchasePrice: item.purchasePrice ?? "",
+      sellingPrice: item.sellingPrice ?? "",
+      vendorName: item.vendorName || "",
+      billFileUrl: url,
+      invoiceNumber: item.invoiceNumber || "",
+      invoiceDate: item.invoiceDate || "",
+      pack: item.pack || "",
+      mrp: item.mrp ?? "",
+      gstPercent: item.gstPercent ?? "",
+      discountPercent: item.discountPercent ?? "",
+      value: item.value ?? "",
+    }));
+    setRows(parsedRows);
+    return parsedRows;
+  }
 
-    setRows((prev) =>
-      prev.map((row) => ({
-        ...row,
-        billFileUrl: url,
-      }))
-    );
-    return null;
-  };
+  setRows((prev) =>
+    prev.map((row) => ({
+      ...row,
+      billFileUrl: url,
+    }))
+  );
+  return null;
+};
 
-  const downloadExcel = (rowsToExport?: MedicineRow[], customBillUrl?: string) => {
-    const usableRows = sanitizeRows(rowsToExport || rows, customBillUrl || billFileUrl);
+  const downloadExcel = async (
+  directExcelUrl?: string,
+  rowsToExport?: MedicineRow[],
+  customBillUrl?: string
+) => {
+  if (directExcelUrl) {
+    const a = document.createElement("a");
+    a.href = directExcelUrl;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return;
+  }
 
-    const exportRows =
-      usableRows.length > 0
-        ? usableRows.map((row) => ({
-            "Medicine Name": row.medicineName,
-            "Batch Number": row.batchNumber,
-            "Expiry Date": row.expiryDate,
-            Quantity: row.quantity,
-            "Purchase Price": row.purchasePrice,
-            "Selling Price": row.sellingPrice,
-            "Vendor Name": row.vendorName,
-            "Bill File URL": row.billFileUrl || "",
-          }))
-        : [
-            {
-              "Medicine Name": "",
-              "Batch Number": "",
-              "Expiry Date": "",
-              Quantity: "",
-              "Purchase Price": "",
-              "Selling Price": "",
-              "Vendor Name": "",
-              "Bill File URL": customBillUrl || billFileUrl || "",
-            },
-          ];
+  const usableRows = sanitizeRows(rowsToExport || rows, customBillUrl || billFileUrl);
 
-    const worksheet = XLSX.utils.json_to_sheet(exportRows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Medical Stock");
-    XLSX.writeFile(workbook, `medical-stock-${Date.now()}.xlsx`);
-  };
+  const exportRows =
+    usableRows.length > 0
+      ? usableRows.map((row: any) => ({
+          "Vendor Name": row.vendorName || "",
+          "Invoice Number": row.invoiceNumber || "",
+          "Invoice Date": row.invoiceDate || "",
+          "Medicine Name": row.medicineName,
+          Pack: row.pack || "",
+          "Batch Number": row.batchNumber,
+          "Expiry Date": row.expiryDate,
+          Quantity: row.quantity,
+          MRP: row.mrp || "",
+          "Purchase Price": row.purchasePrice,
+          "Selling Price": row.sellingPrice,
+          "GST %": row.gstPercent || "",
+          "Discount %": row.discountPercent || "",
+          Value: row.value || "",
+          "Bill File URL": row.billFileUrl || "",
+        }))
+      : [
+          {
+            "Vendor Name": "",
+            "Invoice Number": "",
+            "Invoice Date": "",
+            "Medicine Name": "",
+            Pack: "",
+            "Batch Number": "",
+            "Expiry Date": "",
+            Quantity: "",
+            MRP: "",
+            "Purchase Price": "",
+            "Selling Price": "",
+            "GST %": "",
+            "Discount %": "",
+            Value: "",
+            "Bill File URL": customBillUrl || billFileUrl || "",
+          },
+        ];
+
+  const worksheet = XLSX.utils.json_to_sheet(exportRows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Medical Stock");
+  XLSX.writeFile(workbook, `medical-stock-${Date.now()}.xlsx`);
+};
 
   const handleUpload = async (file: File) => {
-    setUploading(true);
-    setError("");
-    setMessage("");
-    setParseStatus("");
+  setUploading(true);
+  setError("");
+  setMessage("");
+  setParseStatus("");
 
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
 
-      const res = await fetch("/api/medical-stock/upload", {
-        method: "POST",
-        body: formData,
-      });
+    const res = await fetch("/api/medical-stock/upload", {
+      method: "POST",
+      body: formData,
+    });
 
-      const data = await res.json();
+    const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data?.error || "Upload failed");
-      }
-
-      const uploadedUrl = data?.fileUrl || "";
-      const parsedItems = Array.isArray(data?.parsedItems) ? data.parsedItems : [];
-      const fileKind = data?.fileKind || "unknown";
-
-      setBillFileUrl(uploadedUrl);
-      setBillFileKind(fileKind);
-      setLastUploadName(file.name);
-      setParseStatus(data?.message || "Bill uploaded successfully.");
-      applyBillUrlToAllRows(uploadedUrl);
-
-      const replacedRows = replaceRowsWithParsedOrKeepManual(parsedItems, uploadedUrl);
-
-      if (replacedRows && replacedRows.length > 0) {
-        downloadExcel(replacedRows, uploadedUrl);
-      } else {
-        downloadExcel(undefined, uploadedUrl);
-      }
-
-      setMessage("Bill uploaded successfully. Excel file downloaded.");
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+    if (!res.ok) {
+      throw new Error(data?.error || "Upload failed");
     }
-  };
+
+    const uploadedUrl = data?.fileUrl || "";
+    const parsedItems = Array.isArray(data?.parsedItems) ? data.parsedItems : [];
+    const fileKind = data?.fileKind || "unknown";
+    const excelUrl = data?.excelUrl || "";
+
+    setBillFileUrl(uploadedUrl);
+    setBillFileKind(fileKind);
+    setLastUploadName(file.name);
+    setParseStatus(data?.message || "Bill uploaded successfully.");
+
+    applyBillUrlToAllRows(uploadedUrl);
+
+    const replacedRows = replaceRowsWithParsedOrKeepManual(parsedItems, uploadedUrl);
+
+    await downloadExcel(excelUrl, replacedRows || undefined, uploadedUrl);
+
+    setMessage(
+      parsedItems.length > 0
+        ? "Bill uploaded, parsed, and Excel downloaded successfully."
+        : "Bill uploaded safely. Parsing failed, manual entry remains available, and Excel template downloaded."
+    );
+  } catch (err) {
+    console.error(err);
+    setError(err instanceof Error ? err.message : "Upload failed");
+  } finally {
+    setUploading(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+};
 
   const handleSave = async () => {
     setSaving(true);
