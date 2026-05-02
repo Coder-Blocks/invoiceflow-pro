@@ -51,30 +51,6 @@ function normalizeInvoiceDate(value: string): string {
   return "";
 }
 
-async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  try {
-    const pdfParseModule = await import("pdf-parse");
-    const pdfParse = (pdfParseModule as any).default || pdfParseModule;
-    const result = await pdfParse(buffer);
-    return result?.text || "";
-  } catch (error) {
-    console.error("PDF parse failed:", error);
-    return "";
-  }
-}
-
-async function extractTextFromImage(buffer: Buffer): Promise<string> {
-  try {
-    const tesseractModule = await import("tesseract.js");
-    const Tesseract = (tesseractModule as any).default || tesseractModule;
-    const result = await Tesseract.recognize(buffer, "eng");
-    return result?.data?.text || "";
-  } catch (error) {
-    console.error("Image OCR failed:", error);
-    return "";
-  }
-}
-
 function extractVendorName(text: string): string {
   const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
 
@@ -103,168 +79,6 @@ function extractInvoiceNumber(text: string): string {
 function extractInvoiceDate(text: string): string {
   const match = text.match(/INV DT\.\s*:\s*(\d{2}-\d{2}-\d{4})/i);
   return normalizeInvoiceDate(match?.[1] || "");
-}
-
-function isNoiseLine(line: string): boolean {
-  return (
-    !line ||
-    /Qty\. Pack Batch No\. Exp\.Dt\. MRP Product Description|Old MRP Rate HSN GST|GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs :|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO|WE HEREBY|INTEREST AT|Subject to|Last 5 Payment|SVMPL QR|CUS000|TELANGANA|HYDERABAD|KUKATPALLY|PRAGATI NAGAR/i.test(
-      line
-    )
-  );
-}
-
-function isAmountOnlyLine(line: string): boolean {
-  return /^\|?\s*[\d.]+\s*$/.test(line);
-}
-
-function looksLikeDetailLine(line: string): boolean {
-  // example:
-  // 1 0.00 ARISTO PHA CD25626 05/27 201.56 153.57 30042019 5 5.00 153.19
-  const parts = line.split(/\s+/);
-  const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
-  if (expIndex < 2) return false;
-
-  const tail = parts.slice(expIndex + 1);
-  if (tail.length < 6) return false;
-
-  return /^\d{8}$/.test(tail[2] || "");
-}
-
-function parseDetailLine(line: string) {
-  const parts = line.split(/\s+/);
-  const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
-  if (expIndex < 2) return null;
-
-  const tail = parts.slice(expIndex + 1);
-  if (tail.length < 6) return null;
-  if (!/^\d{8}$/.test(tail[2] || "")) return null;
-
-  return {
-    batchNumber: parts[expIndex - 1],
-    expiryDate: normalizeExpiry(parts[expIndex]),
-    mrp: toNumber(tail[0]),
-    purchasePrice: toNumber(tail[1]),
-    gstPercent: toNumber(tail[3]),
-    discountPercent: toNumber(tail[4]),
-    value: toNumber(tail[5]),
-  };
-}
-
-function cleanupDescription(text: string): string {
-  return text.replace(/\|\s*[\d.]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function parseDescriptionBlock(descLines: string[]) {
-  const text = cleanupDescription(descLines.join(" "));
-  // examples:
-  // 1.00 30ML MONOCEF O CV 100 SYR
-  // 6.00 0.00 10 PCS CIPZEN D TAB
-  // 30.00 200 ML PROLYTE ORS APPLE LIQUID 200 ML
-  let medicineName = text;
-  let quantity = 0;
-  let pack = "";
-
-  const qtyMatch = medicineName.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-  if (qtyMatch) {
-    quantity = toNumber(qtyMatch[1]);
-    medicineName = qtyMatch[2].trim();
-  }
-
-  // sometimes second token is free qty like 0.00
-  const freeQtyMatch = medicineName.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-  if (freeQtyMatch && toNumber(freeQtyMatch[1]) <= quantity) {
-    medicineName = freeQtyMatch[2].trim();
-  }
-
-  const packStartMatch = medicineName.match(
-    /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))\s+(.+)$/i
-  );
-  if (packStartMatch) {
-    pack = packStartMatch[1].trim();
-    medicineName = packStartMatch[2].trim();
-  } else {
-    const packInlineMatch = medicineName.match(
-      /^((?:\d+(?:\.\d+)?)\s+[A-Z]+)\s+(.+)$/i
-    );
-    if (packInlineMatch) {
-      pack = packInlineMatch[1].trim();
-      medicineName = packInlineMatch[2].trim();
-    }
-  }
-
-  return {
-    quantity,
-    pack,
-    medicineName: medicineName.trim(),
-  };
-}
-
-function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedicineItem[] {
-  const vendorName = extractVendorName(text);
-  const invoiceNumber = extractInvoiceNumber(text);
-  const invoiceDate = extractInvoiceDate(text);
-
-  const lines = text
-    .split(/\r?\n/)
-    .map(cleanLine)
-    .filter(Boolean);
-
-  const items: ParsedMedicineItem[] = [];
-  let descBuffer: string[] = [];
-
-  for (const line of lines) {
-    if (isNoiseLine(line)) continue;
-    if (isAmountOnlyLine(line)) continue;
-
-    if (looksLikeDetailLine(line)) {
-      const detail = parseDetailLine(line);
-      if (!detail) {
-        descBuffer = [];
-        continue;
-      }
-
-      const parsedDesc = parseDescriptionBlock(descBuffer);
-
-      if (parsedDesc.medicineName) {
-        items.push({
-          medicineName: parsedDesc.medicineName,
-          batchNumber: detail.batchNumber,
-          expiryDate: detail.expiryDate,
-          quantity: parsedDesc.quantity,
-          purchasePrice: detail.purchasePrice,
-          sellingPrice: detail.mrp || detail.purchasePrice,
-          vendorName,
-          invoiceNumber,
-          invoiceDate,
-          pack: parsedDesc.pack,
-          mrp: detail.mrp,
-          gstPercent: detail.gstPercent,
-          discountPercent: detail.discountPercent,
-          value: detail.value,
-          billFileUrl,
-        });
-      }
-
-      descBuffer = [];
-      continue;
-    }
-
-    descBuffer.push(line);
-  }
-
-  return items.filter(
-    (item, index, arr) =>
-      item.medicineName &&
-      item.quantity > 0 &&
-      arr.findIndex(
-        (x) =>
-          x.medicineName === item.medicineName &&
-          x.batchNumber === item.batchNumber &&
-          x.expiryDate === item.expiryDate &&
-          x.value === item.value
-      ) === index
-  );
 }
 
 function buildExcelBase64(items: ParsedMedicineItem[]): string {
@@ -310,13 +124,188 @@ function buildExcelBase64(items: ParsedMedicineItem[]): string {
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows);
   XLSX.utils.book_append_sheet(wb, ws, "Medical Stock");
+  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  return buffer.toString("base64");
+}
 
-  const buffer = XLSX.write(wb, {
-    type: "buffer",
-    bookType: "xlsx",
+async function callOcrSpace(file: File) {
+  const apiKey = process.env.OCR_SPACE_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("OCR_SPACE_API_KEY is missing in environment variables.");
+  }
+
+  const form = new FormData();
+  form.append("file", file);
+  form.append("language", "eng");
+  form.append("isOverlayRequired", "false");
+  form.append("scale", "true");
+  form.append("isTable", "true");
+  form.append("OCREngine", "3");
+  form.append("filetype", file.type === "application/pdf" ? "PDF" : "JPG");
+
+  const res = await fetch("https://api.ocr.space/parse/image", {
+    method: "POST",
+    headers: {
+      apikey: apiKey,
+    },
+    body: form,
   });
 
-  return buffer.toString("base64");
+  if (!res.ok) {
+    throw new Error(`OCR API failed with status ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data;
+}
+
+function parseMarkdownTable(text: string, billFileUrl: string): ParsedMedicineItem[] {
+  const vendorName = extractVendorName(text);
+  const invoiceNumber = extractInvoiceNumber(text);
+  const invoiceDate = extractInvoiceDate(text);
+
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  const tableLines = lines.filter((l) => l.startsWith("|") && l.endsWith("|"));
+  if (tableLines.length < 3) return [];
+
+  const rows: ParsedMedicineItem[] = [];
+
+  for (const line of tableLines) {
+    if (
+      /Sr|Qty|FQty|Pack|Product Description|Mfg|Batch|Exp|MRP|Rate|HSN|GST|Dis|Value/i.test(
+        line
+      )
+    ) {
+      continue;
+    }
+
+    if (/^\|?\s*-+\s*\|/.test(line)) {
+      continue;
+    }
+
+    const cols = line
+      .split("|")
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+
+    if (cols.length < 13) continue;
+
+    const sr = cols[0];
+    if (!/^\d+$/.test(sr)) continue;
+
+    const quantity = toNumber(cols[1]);
+    const pack = cols[3] || "";
+    const medicineName = cols[4] || "";
+    const batchNumber = cols[6] || "";
+    const expiryDate = normalizeExpiry(cols[7] || "");
+    const mrp = toNumber(cols[8]);
+    const purchasePrice = toNumber(cols[9]);
+    const gstPercent = toNumber(cols[11]);
+    const discountPercent = toNumber(cols[12]);
+    const value = toNumber(cols[13]);
+
+    if (!medicineName || !batchNumber) continue;
+
+    rows.push({
+      medicineName,
+      batchNumber,
+      expiryDate,
+      quantity,
+      purchasePrice,
+      sellingPrice: mrp || purchasePrice,
+      vendorName,
+      invoiceNumber,
+      invoiceDate,
+      pack,
+      mrp,
+      gstPercent,
+      discountPercent,
+      value,
+      billFileUrl,
+    });
+  }
+
+  return rows;
+}
+
+function parseFlatTableLines(text: string, billFileUrl: string): ParsedMedicineItem[] {
+  const vendorName = extractVendorName(text);
+  const invoiceNumber = extractInvoiceNumber(text);
+  const invoiceDate = extractInvoiceDate(text);
+
+  const rawLines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
+  const items: ParsedMedicineItem[] = [];
+
+  for (const line of rawLines) {
+    // Expected OCR-space table-ish line:
+    // 1 1.00 0.00 30ML MONOCEF O CV 100 SYR ARISTO PHA CD25626 05/27 201.56 153.57 30042019 5 5.00 153.19
+    const match = line.match(
+      /^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+?)\s+([A-Z0-9/-]{4,})\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/
+    );
+
+    if (!match) continue;
+
+    let left = match[4].trim();
+    const batchNumber = match[5].trim();
+    const expiryDate = normalizeExpiry(match[6].trim());
+    const mrp = toNumber(match[7]);
+    const purchasePrice = toNumber(match[8]);
+    const gstPercent = toNumber(match[10]);
+    const discountPercent = toNumber(match[11]);
+    const value = toNumber(match[12]);
+    const quantity = toNumber(match[2]);
+
+    let pack = "";
+    let medicineName = left;
+
+    const packMatch =
+      left.match(/^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|S))\s+(.+)$/i) ||
+      left.match(/^((?:\d+[A-Z]+)|(?:\d+\s+[A-Z]+))\s+(.+)$/i);
+
+    if (packMatch) {
+      pack = packMatch[1].trim();
+      medicineName = packMatch[2].trim();
+    }
+
+    // remove likely manufacturer tail before batch
+    medicineName = medicineName
+      .replace(/\s+[A-Z]{2,}(?:\s+[A-Z]{2,}){0,2}$/i, "")
+      .trim();
+
+    if (!medicineName) continue;
+
+    items.push({
+      medicineName,
+      batchNumber,
+      expiryDate,
+      quantity,
+      purchasePrice,
+      sellingPrice: mrp || purchasePrice,
+      vendorName,
+      invoiceNumber,
+      invoiceDate,
+      pack,
+      mrp,
+      gstPercent,
+      discountPercent,
+      value,
+      billFileUrl,
+    });
+  }
+
+  return items;
+}
+
+function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedicineItem[] {
+  const markdownRows = parseMarkdownTable(text, billFileUrl);
+  if (markdownRows.length > 0) return markdownRows;
+
+  const flatRows = parseFlatTableLines(text, billFileUrl);
+  if (flatRows.length > 0) return flatRows;
+
+  return [];
 }
 
 export async function POST(req: NextRequest) {
@@ -339,19 +328,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    const ocrData = await callOcrSpace(file);
 
-    let extractedText = "";
-    if (isPdf) {
-      extractedText = await extractTextFromPdf(buffer);
-    } else {
-      extractedText = await extractTextFromImage(buffer);
-    }
+    const parsedText = Array.isArray(ocrData?.ParsedResults)
+      ? ocrData.ParsedResults.map((r: any) => r?.ParsedText || "").join("\n")
+      : "";
 
     const billFileUrl = file.name;
-    const parsedItems = extractedText
-      ? parseMedicalInvoiceText(extractedText, billFileUrl)
+    const parsedItems = parsedText
+      ? parseMedicalInvoiceText(parsedText, billFileUrl)
       : [];
 
     const excelBase64 = buildExcelBase64(parsedItems);
@@ -364,16 +349,21 @@ export async function POST(req: NextRequest) {
       parsedCount: parsedItems.length,
       excelBase64,
       excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
-      extractedText: extractedText.slice(0, 4000),
+      extractedText: parsedText.slice(0, 5000),
       message:
         parsedItems.length > 0
           ? `Bill parsed successfully. ${parsedItems.length} items found.`
-          : "Bill uploaded safely, but no medicine rows could be parsed.",
+          : "OCR finished, but no medicine rows could be parsed.",
+      ocrError:
+        ocrData?.IsErroredOnProcessing || false,
+      ocrMessages: ocrData?.ErrorMessage || [],
     });
   } catch (error) {
     console.error("Medical stock upload error:", error);
     return NextResponse.json(
-      { error: "Upload failed while processing the bill." },
+      {
+        error: error instanceof Error ? error.message : "Upload failed while processing the bill.",
+      },
       { status: 500 }
     );
   }
