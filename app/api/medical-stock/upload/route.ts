@@ -21,13 +21,13 @@ type ParsedMedicineItem = {
   billFileUrl: string;
 };
 
-function toNumber(value: string | number | undefined | null) {
+function toNumber(value: string | number | undefined | null): number {
   const cleaned = String(value ?? "").replace(/[^\d.]/g, "");
   const num = Number(cleaned);
   return Number.isFinite(num) ? num : 0;
 }
 
-function normalizeExpiry(value: string) {
+function normalizeExpiry(value: string): string {
   const v = String(value || "").trim();
   const mmYY = v.match(/^(\d{2})\/(\d{2})$/);
   if (mmYY) {
@@ -37,7 +37,7 @@ function normalizeExpiry(value: string) {
   return "";
 }
 
-function normalizeInvoiceDate(value: string) {
+function normalizeInvoiceDate(value: string): string {
   const v = String(value || "").trim();
   const ddmmyyyy = v.match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (ddmmyyyy) {
@@ -71,116 +71,88 @@ async function extractTextFromImage(buffer: Buffer): Promise<string> {
   }
 }
 
-function extractVendorName(text: string) {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+function cleanLine(line: string): string {
+  return line.replace(/\s+/g, " ").trim();
+}
 
-  const idx = lines.findIndex((l) => /GST INVOICE/i.test(l));
-  if (idx !== -1) {
-    for (let i = idx + 1; i < Math.min(idx + 10, lines.length); i++) {
+function extractVendorName(text: string): string {
+  const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
+
+  const gstInvoiceIndex = lines.findIndex((l) => /GST INVOICE/i.test(l));
+  if (gstInvoiceIndex >= 0) {
+    for (let i = gstInvoiceIndex + 1; i < Math.min(gstInvoiceIndex + 8, lines.length); i++) {
       const line = lines[i];
       if (
         line &&
-        !/Duplicate Copy|Page|Food Lic|Bank|Account|IFSC|CIN|MSME|A UNIT OF/i.test(
-          line
-        )
+        !/Duplicate Copy|Page|Food Lic|Bank|Account|IFSC|CIN|MSME|A UNIT OF/i.test(line)
       ) {
         return line;
       }
     }
   }
 
-  const match =
-    text.match(/\n([A-Z0-9\s().,&/-]{8,}PVT LTD)\n/i) ||
-    text.match(/\n([A-Z0-9\s().,&/-]{8,}LIMITED)\n/i);
-
-  return match?.[1]?.replace(/\s+/g, " ").trim() || "";
+  const pvtLine = lines.find((l) => /PVT LTD|LIMITED/i.test(l));
+  return pvtLine || "";
 }
 
-function extractInvoiceNumber(text: string) {
+function extractInvoiceNumber(text: string): string {
   const match = text.match(/INV NO\.\s*:\s*([A-Z0-9/-]+)/i);
   return match?.[1]?.trim() || "";
 }
 
-function extractInvoiceDate(text: string) {
+function extractInvoiceDate(text: string): string {
   const match = text.match(/INV DT\.\s*:\s*(\d{2}-\d{2}-\d{4})/i);
   return normalizeInvoiceDate(match?.[1] || "");
 }
 
-function isNoiseLine(line: string) {
+function isHeaderOrFooterNoise(line: string): boolean {
   return (
     !line ||
-    /GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO|WE HEREBY|INTEREST AT|Subject to|Last 5 Payment/i.test(
+    /GST INVOICE|Duplicate Copy|Page \d+ of \d+|Gross Value|Disc\. Value|Net Value|GST Value|Grand Total|Amount In Words|Total Items|Total Qty|Taxable|CGST|SGST|IGST|Remarks|PhonePe|Outs :|Authorised Signatory|Jurisdiction|Print Time|Bank :|Account :|IFSC :|Mobile :|PAN No\.|GST No\.|D\.L\. No\.|Order No\.|Food Lic|MSME|CIN NO|WE HEREBY|INTEREST AT|Subject to|Last 5 Payment|SVMPL QR|Duplicate/i.test(
       line
     )
   );
 }
 
-function cleanDescriptionLine(line: string) {
-  return line.replace(/\|\s*[\d.]+/g, "").replace(/\s+/g, " ").trim();
+function isAmountOnlyLine(line: string): boolean {
+  return /^\|?\s*[\d.]+\s*$/.test(line);
 }
 
-function derivePackAndMedicine(source: string) {
-  const text = cleanDescriptionLine(source);
+function isDescriptionStarter(line: string): boolean {
+  return /^\d+(?:\.\d+)?\s+/.test(line) && !looksLikeDetailLine(line);
+}
 
-  const frontPackMatch = text.match(
-    /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))\s+(.+)$/i
-  );
+function looksLikeDetailLine(line: string): boolean {
+  const parts = line.split(/\s+/);
+  const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
+  if (expIndex < 4) return false;
 
-  if (frontPackMatch) {
-    return {
-      pack: frontPackMatch[1].trim(),
-      medicineName: frontPackMatch[2].trim(),
-    };
-  }
+  const after = parts.slice(expIndex + 1);
+  if (after.length < 6) return false;
 
-  const tailPackMatch = text.match(
-    /^(.+?)\s+((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))$/i
-  );
-
-  if (tailPackMatch) {
-    return {
-      pack: tailPackMatch[2].trim(),
-      medicineName: tailPackMatch[1].trim(),
-    };
-  }
-
-  return {
-    pack: "",
-    medicineName: text,
-  };
+  return /^\d{8}$/.test(after[2] || "");
 }
 
 function parseDetailLine(line: string) {
-  const parts = line.trim().split(/\s+/);
-  if (parts.length < 8) return null;
-
+  const parts = line.split(/\s+/);
   const expIndex = parts.findIndex((p) => /^\d{2}\/\d{2}$/.test(p));
-  if (expIndex === -1) return null;
-  if (expIndex < 3) return null;
+  if (expIndex < 4) return null;
 
-  const numericTail = parts.slice(expIndex + 1);
-  if (numericTail.length < 6) return null;
+  const after = parts.slice(expIndex + 1);
+  if (after.length < 6) return null;
+  if (!/^\d{8}$/.test(after[2] || "")) return null;
 
+  const quantity = toNumber(parts[0]);
   const batchNumber = parts[expIndex - 1];
-  const mfg = parts.slice(2, expIndex - 1).join(" ").trim();
-
   const expiryDate = normalizeExpiry(parts[expIndex]);
-  const mrp = toNumber(numericTail[0]);
-  const purchasePrice = toNumber(numericTail[1]);
-  const hsn = numericTail[2] || "";
-  const gstPercent = toNumber(numericTail[3]);
-  const discountPercent = toNumber(numericTail[4]);
-  const value = toNumber(numericTail[5]);
-
-  if (!/^\d{8}$/.test(hsn)) return null;
+  const mrp = toNumber(after[0]);
+  const purchasePrice = toNumber(after[1]);
+  const gstPercent = toNumber(after[3]);
+  const discountPercent = toNumber(after[4]);
+  const value = toNumber(after[5]);
 
   return {
-    quantity: toNumber(parts[0]),
-    freeQty: toNumber(parts[1]),
-    mfg,
+    quantity,
     batchNumber,
     expiryDate,
     mrp,
@@ -191,6 +163,42 @@ function parseDetailLine(line: string) {
   };
 }
 
+function cleanupMedicineText(text: string): string {
+  return text
+    .replace(/\|\s*[\d.]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function derivePackAndMedicine(description: string) {
+  const cleaned = cleanupMedicineText(description);
+
+  const frontPackMatch = cleaned.match(
+    /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))\s+(.+)$/i
+  );
+  if (frontPackMatch) {
+    return {
+      pack: frontPackMatch[1].trim(),
+      medicineName: frontPackMatch[2].trim(),
+    };
+  }
+
+  const endPackMatch = cleaned.match(
+    /^(.+?)\s+((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|S|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|POWDER|VIAL|AMP|KIT))$/i
+  );
+  if (endPackMatch) {
+    return {
+      pack: endPackMatch[2].trim(),
+      medicineName: endPackMatch[1].trim(),
+    };
+  }
+
+  return {
+    pack: "",
+    medicineName: cleaned,
+  };
+}
+
 function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedicineItem[] {
   const vendorName = extractVendorName(text);
   const invoiceNumber = extractInvoiceNumber(text);
@@ -198,25 +206,25 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
 
   const lines = text
     .split(/\r?\n/)
-    .map((l) => l.replace(/\s+/g, " ").trim())
+    .map(cleanLine)
     .filter(Boolean);
 
   const items: ParsedMedicineItem[] = [];
-  let pendingDescription: string[] = [];
+  let descBuffer: string[] = [];
 
   for (const line of lines) {
-    if (isNoiseLine(line)) continue;
+    if (isHeaderOrFooterNoise(line)) continue;
+    if (isAmountOnlyLine(line)) continue;
 
-    const detail = parseDetailLine(line);
+    if (looksLikeDetailLine(line)) {
+      const detail = parseDetailLine(line);
+      if (!detail) {
+        descBuffer = [];
+        continue;
+      }
 
-    if (detail) {
-      const descriptionText = pendingDescription
-        .map(cleanDescriptionLine)
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-
-      const { pack, medicineName } = derivePackAndMedicine(descriptionText);
+      const description = descBuffer.join(" ").trim();
+      const { pack, medicineName } = derivePackAndMedicine(description);
 
       if (medicineName) {
         items.push({
@@ -238,15 +246,13 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
         });
       }
 
-      pendingDescription = [];
+      descBuffer = [];
       continue;
     }
 
-    if (/^\d+\.\d{2}\s+/.test(line) || /^\|\s*[\d.]+$/.test(line)) {
-      continue;
+    if (isDescriptionStarter(line) || descBuffer.length > 0) {
+      descBuffer.push(line);
     }
-
-    pendingDescription.push(line);
   }
 
   return items.filter(
@@ -262,7 +268,7 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
   );
 }
 
-function buildExcelBase64(items: ParsedMedicineItem[]) {
+function buildExcelBase64(items: ParsedMedicineItem[]): string {
   const rows =
     items.length > 0
       ? items.map((item) => ({
@@ -356,10 +362,10 @@ export async function POST(req: NextRequest) {
       fileKind: isPdf ? "pdf" : "image",
       originalFileName: file.name,
       parsedItems,
+      parsedCount: parsedItems.length,
       excelBase64,
       excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
       extractedText: extractedText.slice(0, 4000),
-      parsedCount: parsedItems.length,
       message:
         parsedItems.length > 0
           ? `Bill parsed successfully. ${parsedItems.length} items found.`
@@ -368,9 +374,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("Medical stock upload error:", error);
     return NextResponse.json(
-      {
-        error: "Upload failed while processing the bill.",
-      },
+      { error: "Upload failed while processing the bill." },
       { status: 500 }
     );
   }
