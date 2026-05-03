@@ -40,7 +40,6 @@ const LOW_STOCK_THRESHOLD = 10;
 // IMPORTANT: ikkada mee real organization id pettaali
 const ORGANIZATION_ID = "cmoos5qty0001l704xbn7jhx6";
 
-// CHANGED: empty row final structure
 const createEmptyRow = (): MedicineRow => ({
   id: crypto.randomUUID(),
   medicineName: "",
@@ -67,7 +66,6 @@ function toNumber(value: string | number) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-// CHANGED: mobile/view bill fix kosam file ni persistent data url ga convert chestham
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -93,14 +91,6 @@ function isExpiringSoon(expiryDate: string, days = 30) {
   future.setDate(now.getDate() + days);
   exp.setHours(23, 59, 59, 999);
   return exp.getTime() >= now.getTime() && exp.getTime() <= future.getTime();
-}
-
-function openBillUrl(url?: string | null) {
-  if (!url) return;
-  const newWindow = window.open(url, "_blank", "noopener,noreferrer");
-  if (!newWindow) {
-    window.location.href = url;
-  }
 }
 
 function sanitizeRows(rows: MedicineRow[], fallbackBillUrl?: string) {
@@ -142,7 +132,15 @@ export default function MedicalStockPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  // IMPORTANT:
+  // billFileUrl => DB/save/open kosam persistent URL (data URL)
   const [billFileUrl, setBillFileUrl] = useState("");
+
+  // IMPORTANT:
+  // billPreviewUrl => preview kosam local object URL
+  const [billPreviewUrl, setBillPreviewUrl] = useState("");
+
   const [billFileKind, setBillFileKind] = useState<"image" | "pdf" | "unknown">("unknown");
   const [lastUploadName, setLastUploadName] = useState("");
   const [parseStatus, setParseStatus] = useState("");
@@ -159,7 +157,39 @@ export default function MedicalStockPage() {
     });
   }, [rows]);
 
-  // CHANGED: list fetch same organization id tho chestham
+  useEffect(() => {
+    return () => {
+      if (billPreviewUrl && billPreviewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(billPreviewUrl);
+      }
+    };
+  }, [billPreviewUrl]);
+
+  const openBillUrl = (url?: string | null) => {
+    if (!url) {
+      setError("Bill URL not available.");
+      return;
+    }
+
+    const isValidOpenable =
+      url.startsWith("data:") ||
+      url.startsWith("blob:") ||
+      url.startsWith("http://") ||
+      url.startsWith("https://");
+
+    if (!isValidOpenable) {
+      setError(
+        "This old bill was saved only as a filename, not as a real file URL. Please re-upload this bill once and save again."
+      );
+      return;
+    }
+
+    const newWindow = window.open(url, "_blank", "noopener,noreferrer");
+    if (!newWindow) {
+      window.location.href = url;
+    }
+  };
+
   const fetchSavedItems = async () => {
     setLoadingList(true);
     try {
@@ -215,7 +245,6 @@ export default function MedicalStockPage() {
     });
   };
 
-  // CHANGED: parsed rows ki direct persistent bill url attach chestham
   const replaceRowsWithParsedOrKeepManual = (
     parsedItems: Partial<MedicineRow>[],
     url: string
@@ -276,7 +305,6 @@ export default function MedicalStockPage() {
     URL.revokeObjectURL(url);
   };
 
-  // CHANGED: mobile upload + persistent data url save
   const handleUpload = async (file: File) => {
     setUploading(true);
     setError("");
@@ -284,7 +312,17 @@ export default function MedicalStockPage() {
     setParseStatus("");
 
     try {
+      // NEW:
+      // save/open kosam data URL
       const dataUrl = await fileToDataUrl(file);
+
+      // NEW:
+      // preview kosam object URL
+      const previewUrl = URL.createObjectURL(file);
+
+      if (billPreviewUrl && billPreviewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(billPreviewUrl);
+      }
 
       const formData = new FormData();
       formData.append("file", file);
@@ -294,7 +332,14 @@ export default function MedicalStockPage() {
         body: formData,
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = null;
+
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(text || "Upload failed");
+      }
 
       if (!res.ok) {
         throw new Error(data?.error || "Upload failed");
@@ -305,7 +350,14 @@ export default function MedicalStockPage() {
       const excelBase64 = data?.excelBase64 || "";
       const excelFileName = data?.excelFileName || "";
 
+      // IMPORTANT:
+      // persistent save URL
       setBillFileUrl(dataUrl);
+
+      // IMPORTANT:
+      // preview URL
+      setBillPreviewUrl(previewUrl);
+
       setBillFileKind(fileKind);
       setLastUploadName(file.name);
       setParseStatus(data?.message || "Bill uploaded successfully.");
@@ -330,7 +382,6 @@ export default function MedicalStockPage() {
     }
   };
 
-  // CHANGED: save same organization id tho chestham
   const handleSave = async () => {
     setSaving(true);
     setError("");
@@ -429,15 +480,13 @@ export default function MedicalStockPage() {
   };
 
   const previewBlock = useMemo(() => {
-    if (!billFileUrl) return null;
+    if (!billPreviewUrl) return null;
 
     if (billFileKind === "pdf") {
       return (
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-slate-800">PDF Bill Preview</h3>
-
-            {/* CHANGED: anchor badulu button use chesanu */}
             <button
               type="button"
               onClick={() => openBillUrl(billFileUrl)}
@@ -447,9 +496,9 @@ export default function MedicalStockPage() {
             </button>
           </div>
 
-          <div className="overflow-hidden rounded-xl border border-slate-200">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             <iframe
-              src={billFileUrl}
+              src={billPreviewUrl}
               title="PDF Preview"
               className="h-[500px] w-full bg-white"
             />
@@ -463,8 +512,6 @@ export default function MedicalStockPage() {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-slate-800">Image Bill Preview</h3>
-
-            {/* CHANGED: anchor badulu button use chesanu */}
             <button
               type="button"
               onClick={() => openBillUrl(billFileUrl)}
@@ -476,7 +523,7 @@ export default function MedicalStockPage() {
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-3">
             <img
-              src={billFileUrl}
+              src={billPreviewUrl}
               alt="Uploaded Bill"
               className="max-h-[500px] w-full rounded-lg object-contain"
             />
@@ -486,7 +533,7 @@ export default function MedicalStockPage() {
     }
 
     return null;
-  }, [billFileKind, billFileUrl]);
+  }, [billPreviewUrl, billFileKind, billFileUrl]);
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -522,7 +569,6 @@ export default function MedicalStockPage() {
                 </p>
               </div>
 
-              {/* CHANGED: mobile upload fix - direct button click */}
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
@@ -798,7 +844,6 @@ export default function MedicalStockPage() {
 
             {billFileUrl ? (
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                {/* CHANGED: anchor badulu button use chesanu */}
                 <button
                   type="button"
                   onClick={() => openBillUrl(billFileUrl)}
@@ -896,7 +941,6 @@ export default function MedicalStockPage() {
                         </p>
                       </div>
 
-                      {/* CHANGED: 404 fix kosam anchor badulu button */}
                       {item.billFileUrl ? (
                         <button
                           type="button"
