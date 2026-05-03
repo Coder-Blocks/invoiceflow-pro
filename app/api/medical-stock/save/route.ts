@@ -91,55 +91,52 @@ export async function POST(req: NextRequest) {
 
     let savedCount = 0;
 
-    await prisma.$transaction(async (tx) => {
-      for (const item of validItems) {
-        // same organization + medicine + batch + expiry row already unda?
-        const existing = await tx.medicineStock.findFirst({
-          where: {
-            organizationId: item.organizationId,
-            medicineName: item.medicineName,
-            batchNumber: item.batchNumber,
-            expiryDate: item.expiryDate,
-          },
-          orderBy: {
-            createdAt: "desc",
+    for (const item of validItems) {
+      const existing = await prisma.medicineStock.findFirst({
+        where: {
+          organizationId: item.organizationId,
+          medicineName: item.medicineName,
+          batchNumber: item.batchNumber,
+          expiryDate: item.expiryDate,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+
+      if (existing) {
+        await prisma.medicineStock.update({
+          where: { id: existing.id },
+          data: {
+            quantity: item.quantity,
+            unitType: item.unitType,
+            costPrice: item.costPrice,
+            sellingPrice: item.sellingPrice,
+            vendorName: item.vendorName,
+            billFileUrl: item.billFileUrl,
+            lowStockThreshold: item.lowStockThreshold,
           },
         });
-
-        if (existing) {
-          await tx.medicineStock.update({
-            where: { id: existing.id },
-            data: {
-              quantity: item.quantity,
-              unitType: item.unitType,
-              costPrice: item.costPrice,
-              sellingPrice: item.sellingPrice,
-              vendorName: item.vendorName,
-              billFileUrl: item.billFileUrl,
-              lowStockThreshold: item.lowStockThreshold,
-            },
-          });
-        } else {
-          await tx.medicineStock.create({
-            data: {
-              organizationId: item.organizationId,
-              medicineName: item.medicineName,
-              quantity: item.quantity,
-              unitType: item.unitType,
-              batchNumber: item.batchNumber,
-              expiryDate: item.expiryDate,
-              costPrice: item.costPrice,
-              sellingPrice: item.sellingPrice,
-              vendorName: item.vendorName,
-              billFileUrl: item.billFileUrl,
-              lowStockThreshold: item.lowStockThreshold,
-            },
-          });
-        }
-
-        savedCount++;
+      } else {
+        await prisma.medicineStock.create({
+          data: {
+            organizationId: item.organizationId,
+            medicineName: item.medicineName,
+            quantity: item.quantity,
+            unitType: item.unitType,
+            batchNumber: item.batchNumber,
+            expiryDate: item.expiryDate,
+            costPrice: item.costPrice,
+            sellingPrice: item.sellingPrice,
+            vendorName: item.vendorName,
+            billFileUrl: item.billFileUrl,
+            lowStockThreshold: item.lowStockThreshold,
+          },
+        });
       }
-    });
+
+      savedCount++;
+    }
 
     return NextResponse.json({
       success: true,
