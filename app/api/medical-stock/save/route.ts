@@ -13,11 +13,6 @@ function toNullableString(value: unknown): string | null {
   return str ? str : null;
 }
 
-function normalizeDateString(value: unknown): string {
-  const str = String(value ?? "").trim();
-  return str;
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -42,7 +37,7 @@ export async function POST(req: NextRequest) {
       .map((item: any) => {
         const medicineName = String(item?.medicineName || "").trim();
         const batchNumber = String(item?.batchNumber || "").trim();
-        const expiryDateRaw = normalizeDateString(item?.expiryDate);
+        const expiryDateRaw = String(item?.expiryDate || "").trim();
 
         if (!medicineName || !batchNumber || !expiryDateRaw) {
           return null;
@@ -94,50 +89,62 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // IMPORTANT:
-    // existing same medicine+batch+expiry unte update chestham
-    // leka pothe create chestham
-    const results = await prisma.$transaction(
-      validItems.map((item) =>
-        prisma.medicineStock.upsert({
+    let savedCount = 0;
+
+    await prisma.$transaction(async (tx) => {
+      for (const item of validItems) {
+        // same organization + medicine + batch + expiry row already unda?
+        const existing = await tx.medicineStock.findFirst({
           where: {
-            organizationId_medicineName_batchNumber_expiryDate: {
-              organizationId: item.organizationId,
-              medicineName: item.medicineName,
-              batchNumber: item.batchNumber,
-              expiryDate: item.expiryDate,
-            },
-          },
-          update: {
-            quantity: item.quantity,
-            unitType: item.unitType,
-            costPrice: item.costPrice,
-            sellingPrice: item.sellingPrice,
-            vendorName: item.vendorName,
-            billFileUrl: item.billFileUrl,
-            lowStockThreshold: item.lowStockThreshold,
-          },
-          create: {
             organizationId: item.organizationId,
             medicineName: item.medicineName,
-            quantity: item.quantity,
-            unitType: item.unitType,
             batchNumber: item.batchNumber,
             expiryDate: item.expiryDate,
-            costPrice: item.costPrice,
-            sellingPrice: item.sellingPrice,
-            vendorName: item.vendorName,
-            billFileUrl: item.billFileUrl,
-            lowStockThreshold: item.lowStockThreshold,
           },
-        })
-      )
-    );
+          orderBy: {
+            createdAt: "desc",
+          },
+        });
+
+        if (existing) {
+          await tx.medicineStock.update({
+            where: { id: existing.id },
+            data: {
+              quantity: item.quantity,
+              unitType: item.unitType,
+              costPrice: item.costPrice,
+              sellingPrice: item.sellingPrice,
+              vendorName: item.vendorName,
+              billFileUrl: item.billFileUrl,
+              lowStockThreshold: item.lowStockThreshold,
+            },
+          });
+        } else {
+          await tx.medicineStock.create({
+            data: {
+              organizationId: item.organizationId,
+              medicineName: item.medicineName,
+              quantity: item.quantity,
+              unitType: item.unitType,
+              batchNumber: item.batchNumber,
+              expiryDate: item.expiryDate,
+              costPrice: item.costPrice,
+              sellingPrice: item.sellingPrice,
+              vendorName: item.vendorName,
+              billFileUrl: item.billFileUrl,
+              lowStockThreshold: item.lowStockThreshold,
+            },
+          });
+        }
+
+        savedCount++;
+      }
+    });
 
     return NextResponse.json({
       success: true,
       message: "Medical stock saved successfully",
-      count: results.length,
+      count: savedCount,
     });
   } catch (error: any) {
     console.error("Medical stock save error:", error);
@@ -145,8 +152,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error:
-          error?.message || "Failed to save medical stock data",
+        error: error?.message || "Failed to save medical stock data",
       },
       { status: 500 }
     );
