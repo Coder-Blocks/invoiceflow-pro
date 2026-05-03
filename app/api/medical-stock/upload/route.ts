@@ -30,7 +30,11 @@ type ParsedMedicineItem = {
 };
 
 function cleanLine(line: string): string {
-  return line.replace(/\s+/g, " ").replace(/\|\s*/g, " ").trim();
+  return String(line || "")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\|\s*/g, " | ")
+    .trim();
 }
 
 function toNumber(value: string | number | undefined | null): number {
@@ -61,10 +65,10 @@ function normalizeInvoiceDate(value: string): string {
 
 function extractVendorName(text: string): string {
   const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
-
   const gstIndex = lines.findIndex((l) => /GST INVOICE/i.test(l));
+
   if (gstIndex >= 0) {
-    for (let i = gstIndex + 1; i < Math.min(gstIndex + 10, lines.length); i++) {
+    for (let i = gstIndex + 1; i < Math.min(gstIndex + 8, lines.length); i++) {
       const line = lines[i];
       if (
         line &&
@@ -75,22 +79,27 @@ function extractVendorName(text: string): string {
     }
   }
 
-  const fallback = lines.find((l) => /PVT LTD|LIMITED/i.test(l));
-  return fallback || "";
+  return lines.find((l) => /PVT LTD|LIMITED/i.test(l)) || "";
 }
 
 function extractInvoiceNumber(text: string): string {
-  const match = text.match(/INV NO\.\s*:\s*([A-Z0-9/-]+)/i);
+  const match =
+    text.match(/INV NO\.\s*:\s*([A-Z0-9/-]+)/i) ||
+    text.match(/Invoice\s*No\.?\s*[:\-]?\s*([A-Z0-9/-]+)/i);
   return match?.[1]?.trim() || "";
 }
 
 function extractInvoiceDate(text: string): string {
-  const match = text.match(/INV DT\.\s*:\s*(\d{2}-\d{2}-\d{4})/i);
+  const match =
+    text.match(/INV DT\.\s*:\s*(\d{2}-\d{2}-\d{4})/i) ||
+    text.match(/Invoice\s*Date\s*[:\-]?\s*(\d{2}-\d{2}-\d{4})/i);
   return normalizeInvoiceDate(match?.[1] || "");
 }
 
 function extractGrandTotal(text: string): number {
-  const match = text.match(/Grand Total\s*:\s*([\d,]+\.\d{2}|[\d,]+)/i);
+  const match =
+    text.match(/Grand Total\s*:?\s*([\d,]+\.\d{1,2}|[\d,]+)/i) ||
+    text.match(/Bill Amount\s*:?\s*([\d,]+\.\d{1,2}|[\d,]+)/i);
   return match ? toNumber(match[1]) : 0;
 }
 
@@ -104,7 +113,6 @@ async function optimizeImage(buffer: Buffer): Promise<Buffer> {
 
 async function callOcrSpaceImage(buffer: Buffer, filename: string) {
   const apiKey = process.env.OCR_SPACE_API_KEY;
-
   if (!apiKey) {
     throw new Error("OCR_SPACE_API_KEY missing in environment.");
   }
@@ -123,9 +131,7 @@ async function callOcrSpaceImage(buffer: Buffer, filename: string) {
 
   const res = await fetch("https://api.ocr.space/parse/image", {
     method: "POST",
-    headers: {
-      apikey: apiKey,
-    },
+    headers: { apikey: apiKey },
     body: form,
   });
 
@@ -148,67 +154,26 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   }
 }
 
-function isItemStartLine(line: string): boolean {
-  return /^\d+\s+[\d.]+\s+[\d.]+/.test(line);
+function isStartLine(line: string): boolean {
+  return /^\d+\s+[\d.]+\s+[\d.]+\s+/.test(line);
 }
 
 function isDetailLine(line: string): boolean {
-  return /\b[A-Z0-9-]{4,}\b\s+\d{2}\/\d{2}\s+[\d.]+\s+[\d.]+\s+\d{8}\s+[\d.]+\s+[\d.]+\s+[\d.]+$/i.test(
+  return /\b[A-Z0-9-]{3,}\b\s+\d{2}\/\d{2}\s+[\d.]+\s+[\d.]+\s+\d{8}\s+[\d.]+\s+[\d.]+\s+[\d.]+$/i.test(
     line
   );
 }
 
 function isNoiseLine(line: string): boolean {
-  return (
-    !line ||
-    /Qty\.|Pack|Batch No\.|Exp\.Dt\.|Gross Value|Disc\. Value|Net Value|GST Value|Amount In Words|IGST|SGST|CGST|Taxable|Total Items|PhonePe|Outstanding|Remarks|Authorised Signatory|Jurisdiction|SVMPL QR|Outs :|Rounding|TCS AMT|DN\. Value/i.test(
-      line
-    )
+  return /Qty\.|Pack|Batch No\.|Exp\.Dt\.|Gross Value|Disc\. Value|Net Value|GST Value|Amount In Words|IGST|SGST|CGST|Taxable|Total Items|PhonePe|Outstanding|Remarks|Authorised Signatory|Jurisdiction|SVMPL QR|Outs :|Rounding|TCS AMT|DN\. Value|Bank|IFSC|A\/C/i.test(
+    line
   );
 }
 
-function parseDetailLine(line: string) {
-  const tokens = cleanLine(line).split(/\s+/);
-
-  const expiryIdx = tokens.findIndex((t) => /^\d{2}\/\d{2}$/.test(t));
-  if (expiryIdx < 2) return null;
-
-  const batchNumber = tokens[expiryIdx - 1];
-  const manufacturer = tokens.slice(3, expiryIdx - 1).join(" ").trim();
-
-  const after = tokens.slice(expiryIdx + 1);
-  if (after.length < 6) return null;
-
-  return {
-    manufacturer,
-    batchNumber,
-    expiryDate: normalizeExpiry(tokens[expiryIdx]),
-    mrp: toNumber(after[0]),
-    purchasePrice: toNumber(after[1]),
-    hsn: String(after[2] || ""),
-    gstPercent: toNumber(after[3]),
-    discountPercent: toNumber(after[4]),
-    value: toNumber(after[5]),
-  };
-}
-
-function parseStartAndNameLines(
-  firstLine: string,
-  extraNameLines: string[]
-): {
-  srNo: number;
-  quantity: number;
-  freeQty: number;
-  pack: string;
-  medicineName: string;
-  oldMrpOrShownValue: number;
-} | null {
-  const cleanedFirst = cleanLine(firstLine);
-
-  const m = cleanedFirst.match(/^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+)$/);
+function parseStartLine(firstLine: string, extraNameLines: string[]) {
+  const m = cleanLine(firstLine).match(/^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+)$/);
   if (!m) return null;
 
-  const srNo = toNumber(m[1]);
   const quantity = toNumber(m[2]);
   const freeQty = toNumber(m[3]);
   let rest = m[4].trim();
@@ -225,28 +190,44 @@ function parseStartAndNameLines(
     namePart = packMatch[2].trim();
   }
 
-  const allNameText = [namePart, ...extraNameLines.map(cleanLine)]
+  let medicineName = [namePart, ...extraNameLines.map(cleanLine)]
     .filter(Boolean)
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
 
-  let medicineName = allNameText;
-  let oldMrpOrShownValue = 0;
-
-  const oldMrpMatch = medicineName.match(/\|\s*([\d.]+)\s*$/);
-  if (oldMrpMatch) {
-    oldMrpOrShownValue = toNumber(oldMrpMatch[1]);
-    medicineName = medicineName.replace(/\|\s*[\d.]+\s*$/, "").trim();
-  }
+  // remove trailing old MRP after |
+  medicineName = medicineName.replace(/\|\s*[\d.]+\s*$/, "").trim();
 
   return {
-    srNo,
     quantity,
     freeQty,
     pack,
     medicineName,
-    oldMrpOrShownValue,
+  };
+}
+
+function parseDetailLine(line: string) {
+  const tokens = cleanLine(line).split(/\s+/);
+  const expiryIdx = tokens.findIndex((t) => /^\d{2}\/\d{2}$/.test(t));
+  if (expiryIdx < 2) return null;
+
+  const batchNumber = tokens[expiryIdx - 1];
+  const manufacturer = tokens.slice(3, expiryIdx - 1).join(" ").trim();
+  const after = tokens.slice(expiryIdx + 1);
+
+  if (after.length < 6) return null;
+
+  return {
+    manufacturer,
+    batchNumber,
+    expiryDate: normalizeExpiry(tokens[expiryIdx]),
+    mrp: toNumber(after[0]),
+    purchasePrice: toNumber(after[1]),
+    hsn: String(after[2] || ""),
+    gstPercent: toNumber(after[3]),
+    discountPercent: toNumber(after[4]),
+    value: toNumber(after[5]),
   };
 }
 
@@ -267,12 +248,12 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
   while (i < lines.length) {
     const line = lines[i];
 
-    if (!isItemStartLine(line)) {
+    if (!isStartLine(line)) {
       i++;
       continue;
     }
 
-    const firstLine = line;
+    const startLine = line;
     const nameLines: string[] = [];
     let detailLine = "";
 
@@ -280,11 +261,7 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
     while (j < lines.length) {
       const nextLine = lines[j];
 
-      if (isNoiseLine(nextLine)) {
-        break;
-      }
-
-      if (isItemStartLine(nextLine) && nameLines.length === 0 && !detailLine) {
+      if (isStartLine(nextLine) && !detailLine && nameLines.length === 0) {
         break;
       }
 
@@ -294,17 +271,15 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
         break;
       }
 
-      nameLines.push(nextLine);
+      if (!isNoiseLine(nextLine)) {
+        nameLines.push(nextLine);
+      }
+
       j++;
     }
 
-    if (!detailLine) {
-      i = j;
-      continue;
-    }
-
-    const startData = parseStartAndNameLines(firstLine, nameLines);
-    const detailData = parseDetailLine(detailLine);
+    const startData = parseStartLine(startLine, nameLines);
+    const detailData = detailLine ? parseDetailLine(detailLine) : null;
 
     if (startData && detailData && startData.medicineName) {
       items.push({
@@ -364,7 +339,7 @@ function buildExcelBase64(items: ParsedMedicineItem[], rawText: string): string 
           "Bill Issue Date": item.billIssueDate,
           "Bill Amount": item.billAmount,
           "Total Inc GST": item.totalIncGst,
-          "Medicine Name": item.medicineName,
+          Medicine: item.medicineName,
           "Vendor Name": item.vendorName,
           "Invoice Number": item.invoiceNumber,
           "Invoice Date": item.invoiceDate,
@@ -387,7 +362,7 @@ function buildExcelBase64(items: ParsedMedicineItem[], rawText: string): string 
             "Bill Issue Date": "",
             "Bill Amount": "",
             "Total Inc GST": "",
-            "Medicine Name": "",
+            Medicine: "",
             "Vendor Name": "",
             "Invoice Number": "",
             "Invoice Date": "",
