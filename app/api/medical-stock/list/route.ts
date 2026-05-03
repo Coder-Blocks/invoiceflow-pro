@@ -16,12 +16,8 @@ export async function GET(req: NextRequest) {
     }
 
     const items = await prisma.medicineStock.findMany({
-      where: {
-        organizationId,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
+      where: { organizationId },
+      orderBy: { createdAt: "desc" },
       select: {
         id: true,
         medicineName: true,
@@ -36,24 +32,22 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    const formatted = items.map((item) => ({
-      id: item.id,
-      medicineName: item.medicineName,
-      batchNumber: item.batchNumber,
-      expiryDate: item.expiryDate
-        ? new Date(item.expiryDate).toISOString().split("T")[0]
-        : "",
-      quantity: item.quantity,
-      purchasePrice: Number(item.costPrice ?? 0),
-      sellingPrice: Number(item.sellingPrice ?? 0),
-      vendorName: item.vendorName || "",
-      billFileUrl: item.billFileUrl || "",
-      createdAt: item.createdAt,
-    }));
-
     return NextResponse.json({
       success: true,
-      items: formatted,
+      items: items.map((item) => ({
+        id: item.id,
+        medicineName: item.medicineName,
+        batchNumber: item.batchNumber,
+        expiryDate: item.expiryDate
+          ? new Date(item.expiryDate).toISOString().split("T")[0]
+          : "",
+        quantity: item.quantity,
+        purchasePrice: Number(item.costPrice ?? 0),
+        sellingPrice: Number(item.sellingPrice ?? 0),
+        vendorName: item.vendorName || "",
+        billFileUrl: item.billFileUrl || "",
+        createdAt: item.createdAt,
+      })),
     });
   } catch (error) {
     console.error("Medical stock list error:", error);

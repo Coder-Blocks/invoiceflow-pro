@@ -140,7 +140,7 @@ export default function MedicalStockPage() {
   const fetchSavedItems = async () => {
   setLoadingList(true);
   try {
-    const organizationId = "PASTE_REAL_ORGANIZATION_ID_HERE";
+    const organizationId = "cmoos5qty0001l704xbn7jhx6";
 
     const res = await fetch(
       `/api/medical-stock/list?organizationId=${organizationId}`,
@@ -307,7 +307,7 @@ export default function MedicalStockPage() {
     }
   };
 
-  const handleSave = async () => {
+ const handleSave = async () => {
   setSaving(true);
   setError("");
   setMessage("");
@@ -319,18 +319,13 @@ export default function MedicalStockPage() {
       throw new Error("Please add at least one medicine row before saving.");
     }
 
-    // Temporary fallback:
-    // ikkada mee actual org id pettali.
-    // later session/user API nundi dynamic ga teesukovachu.
-    const organizationId = "cmoos5qty0001l704xbn7jhx6";
-
     const res = await fetch("/api/medical-stock/save", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        organizationId,
+        organizationId: "cmoos5qty0001l704xbn7jhx6",
         items: cleanRows.map((row: any) => ({
           ...row,
           unitType: row.pack || "UNIT",
@@ -345,7 +340,7 @@ export default function MedicalStockPage() {
       throw new Error(data?.error || "Failed to save stock");
     }
 
-    setMessage("Medical stock saved successfully.");
+    setMessage(`Medical stock saved successfully. ${data?.count || 0} rows saved.`);
     await fetchSavedItems();
   } catch (err) {
     console.error(err);
