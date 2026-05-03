@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
 
     if (!organizationId) {
       return NextResponse.json(
-        { error: "organizationId is required" },
+        { success: false, error: "organizationId is required" },
         { status: 400 }
       );
     }
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
         expiryDate: item.expiryDate
           ? new Date(item.expiryDate).toISOString().split("T")[0]
           : "",
-        quantity: item.quantity,
+        quantity: Number(item.quantity ?? 0),
         purchasePrice: Number(item.costPrice ?? 0),
         sellingPrice: Number(item.sellingPrice ?? 0),
         vendorName: item.vendorName || "",
@@ -49,10 +49,14 @@ export async function GET(req: NextRequest) {
         createdAt: item.createdAt,
       })),
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Medical stock list error:", error);
+
     return NextResponse.json(
-      { error: "Failed to fetch medical stock list" },
+      {
+        success: false,
+        error: error?.message || "Failed to fetch medical stock list",
+      },
       { status: 500 }
     );
   }

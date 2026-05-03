@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireActiveOrganization } from "@/lib/active-organization";
 
+export const runtime = "nodejs";
+
 function money(value: number) {
   return `₹${Number(value || 0).toFixed(2)}`;
 }
@@ -75,6 +77,7 @@ export async function POST(req: Request) {
       0
     );
 
+    // FIXED: fallback threshold should be 10, not 0
     const lowStock = stocks.filter(
       (item) =>
         Number(item.quantity || 0) <= Number(item.lowStockThreshold || 10)
