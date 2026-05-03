@@ -91,18 +91,27 @@ async function optimizeImage(buffer: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-async function callOcrSpaceWithBuffer(
-  buffer: Buffer,
+async function callOcrSpaceWithFile(
+  fileBuffer: Buffer,
   filename: string,
-  mimeType: string
+  mimeType: string,
+  fileKind: "image" | "pdf"
 ) {
   const apiKey = process.env.OCR_SPACE_API_KEY;
+
   if (!apiKey) {
     throw new Error("OCR_SPACE_API_KEY missing in environment.");
   }
 
-  const uint8 = new Uint8Array(buffer);
-const blob = new Blob([uint8], { type: mimeType || "image/png" });
+  const finalBuffer =
+    fileKind === "image" ? await optimizeImage(fileBuffer) : fileBuffer;
+
+  const finalMimeType =
+    fileKind === "image" ? "image/png" : mimeType || "application/pdf";
+
+  const uint8 = new Uint8Array(finalBuffer);
+  const blob = new Blob([uint8], { type: finalMimeType });
+
   const form = new FormData();
   form.append("file", blob, filename);
   form.append("language", "eng");
@@ -110,6 +119,10 @@ const blob = new Blob([uint8], { type: mimeType || "image/png" });
   form.append("scale", "true");
   form.append("isTable", "true");
   form.append("OCREngine", "2");
+
+  if (fileKind === "pdf") {
+    form.append("filetype", "PDF");
+  }
 
   const res = await fetch("https://api.ocr.space/parse/image", {
     method: "POST",
@@ -202,8 +215,6 @@ function parseRowsFromOcrText(text: string, billFileUrl: string): ParsedMedicine
   const items: ParsedMedicineItem[] = [];
 
   for (const line of lines) {
-    // Expected OCR row:
-    // 1 1.00 0.00 30ML MONOCEF O CV 100 SYR ARISTO PHA CD25626 05/27 201.56 153.57 30042019 5 5.00 153.19
     const match = line.match(
       /^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+?)\s+([A-Z0-9/-]{4,})\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/i
     );
@@ -279,14 +290,12 @@ export async function POST(req: NextRequest) {
     }
 
     const lowerName = file.name.toLowerCase();
+    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
     const isImage = file.type.startsWith("image/");
 
-    if (!isImage) {
+    if (!isPdf && !isImage) {
       return NextResponse.json(
-        {
-          error:
-            "For now, upload only a clear screenshot/image of the medicine table. PDF full-page OCR is disabled in this route.",
-        },
+        { error: "Only image and PDF files are allowed." },
         { status: 400 }
       );
     }
@@ -294,12 +303,13 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const originalBuffer = Buffer.from(bytes);
 
-    const optimizedBuffer = await optimizeImage(originalBuffer);
+    const fileKind: "image" | "pdf" = isPdf ? "pdf" : "image";
 
-    const ocrData = await callOcrSpaceWithBuffer(
-      optimizedBuffer,
+    const ocrData = await callOcrSpaceWithFile(
+      originalBuffer,
       file.name,
-      "image/png"
+      file.type,
+      fileKind
     );
 
     const parsedText = Array.isArray(ocrData?.ParsedResults)
@@ -315,7 +325,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      fileKind: "image",
+      fileKind,
       originalFileName: file.name,
       parsedItems,
       parsedCount: parsedItems.length,
