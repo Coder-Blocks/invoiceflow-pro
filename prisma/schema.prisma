@@ -465,7 +465,6 @@ model MedicineStock {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([organizationId, medicineName, batchNumber, expiryDate])
   @@index([organizationId])
   @@index([medicineName])
   @@index([batchNumber])
