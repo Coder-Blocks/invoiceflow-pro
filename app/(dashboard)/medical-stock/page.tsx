@@ -37,6 +37,10 @@ type SavedItem = {
 
 const LOW_STOCK_THRESHOLD = 10;
 
+// IMPORTANT: ikkada mee real organization id pettaali
+const ORGANIZATION_ID = "cmoos5qty0001l704xbn7jhx6";
+
+// CHANGED: empty row final structure
 const createEmptyRow = (): MedicineRow => ({
   id: crypto.randomUUID(),
   medicineName: "",
@@ -58,9 +62,19 @@ const createEmptyRow = (): MedicineRow => ({
 
 function toNumber(value: string | number) {
   if (typeof value === "number") return value;
-  const cleaned = String(value).replace(/[^\d.]/g, "");
+  const cleaned = String(value ?? "").replace(/[^\d.]/g, "");
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// CHANGED: mobile/view bill fix kosam file ni persistent data url ga convert chestham
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function isExpired(expiryDate: string) {
@@ -79,6 +93,14 @@ function isExpiringSoon(expiryDate: string, days = 30) {
   future.setDate(now.getDate() + days);
   exp.setHours(23, 59, 59, 999);
   return exp.getTime() >= now.getTime() && exp.getTime() <= future.getTime();
+}
+
+function openBillUrl(url?: string | null) {
+  if (!url) return;
+  const newWindow = window.open(url, "_blank", "noopener,noreferrer");
+  if (!newWindow) {
+    window.location.href = url;
+  }
 }
 
 function sanitizeRows(rows: MedicineRow[], fallbackBillUrl?: string) {
@@ -137,30 +159,29 @@ export default function MedicalStockPage() {
     });
   }, [rows]);
 
+  // CHANGED: list fetch same organization id tho chestham
   const fetchSavedItems = async () => {
-  setLoadingList(true);
-  try {
-    const organizationId = "cmoos5qty0001l704xbn7jhx6";
+    setLoadingList(true);
+    try {
+      const res = await fetch(
+        `/api/medical-stock/list?organizationId=${ORGANIZATION_ID}`,
+        { cache: "no-store" }
+      );
 
-    const res = await fetch(
-      `/api/medical-stock/list?organizationId=${organizationId}`,
-      { cache: "no-store" }
-    );
+      const data = await res.json();
 
-    const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch stock list");
+      }
 
-    if (!res.ok) {
-      throw new Error(data?.error || "Failed to fetch stock list");
+      setSavedItems(Array.isArray(data.items) ? data.items : []);
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Failed to fetch stock list");
+    } finally {
+      setLoadingList(false);
     }
-
-    setSavedItems(Array.isArray(data.items) ? data.items : []);
-  } catch (err) {
-    console.error(err);
-    setError(err instanceof Error ? err.message : "Failed to fetch stock list");
-  } finally {
-    setLoadingList(false);
-  }
-};
+  };
 
   useEffect(() => {
     fetchSavedItems();
@@ -194,6 +215,7 @@ export default function MedicalStockPage() {
     });
   };
 
+  // CHANGED: parsed rows ki direct persistent bill url attach chestham
   const replaceRowsWithParsedOrKeepManual = (
     parsedItems: Partial<MedicineRow>[],
     url: string
@@ -254,6 +276,7 @@ export default function MedicalStockPage() {
     URL.revokeObjectURL(url);
   };
 
+  // CHANGED: mobile upload + persistent data url save
   const handleUpload = async (file: File) => {
     setUploading(true);
     setError("");
@@ -261,7 +284,7 @@ export default function MedicalStockPage() {
     setParseStatus("");
 
     try {
-      const localPreviewUrl = URL.createObjectURL(file);
+      const dataUrl = await fileToDataUrl(file);
 
       const formData = new FormData();
       formData.append("file", file);
@@ -282,19 +305,19 @@ export default function MedicalStockPage() {
       const excelBase64 = data?.excelBase64 || "";
       const excelFileName = data?.excelFileName || "";
 
-      setBillFileUrl(localPreviewUrl);
+      setBillFileUrl(dataUrl);
       setBillFileKind(fileKind);
       setLastUploadName(file.name);
       setParseStatus(data?.message || "Bill uploaded successfully.");
 
-      replaceRowsWithParsedOrKeepManual(parsedItems, file.name);
+      replaceRowsWithParsedOrKeepManual(parsedItems, dataUrl);
 
       await downloadExcel(excelBase64, excelFileName);
 
       setMessage(
         parsedItems.length > 0
           ? "Bill uploaded, medicines parsed, and Excel downloaded successfully."
-          : "Bill uploaded safely. Parsing failed, manual entry remains available."
+          : "Bill uploaded safely. OCR finished, but no medicine rows could be parsed."
       );
     } catch (err) {
       console.error(err);
@@ -307,48 +330,49 @@ export default function MedicalStockPage() {
     }
   };
 
- const handleSave = async () => {
-  setSaving(true);
-  setError("");
-  setMessage("");
+  // CHANGED: save same organization id tho chestham
+  const handleSave = async () => {
+    setSaving(true);
+    setError("");
+    setMessage("");
 
-  try {
-    const cleanRows = sanitizeRows(rows, billFileUrl);
+    try {
+      const cleanRows = sanitizeRows(rows, billFileUrl);
 
-    if (cleanRows.length === 0) {
-      throw new Error("Please add at least one medicine row before saving.");
+      if (cleanRows.length === 0) {
+        throw new Error("Please add at least one medicine row before saving.");
+      }
+
+      const res = await fetch("/api/medical-stock/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          organizationId: ORGANIZATION_ID,
+          items: cleanRows.map((row: any) => ({
+            ...row,
+            unitType: row.pack || "UNIT",
+            lowStockThreshold: 10,
+          })),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to save stock");
+      }
+
+      setMessage(`Medical stock saved successfully. ${data?.count || 0} rows saved.`);
+      await fetchSavedItems();
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Failed to save stock");
+    } finally {
+      setSaving(false);
     }
-
-    const res = await fetch("/api/medical-stock/save", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        organizationId: "cmoos5qty0001l704xbn7jhx6",
-        items: cleanRows.map((row: any) => ({
-          ...row,
-          unitType: row.pack || "UNIT",
-          lowStockThreshold: 10,
-        })),
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data?.error || "Failed to save stock");
-    }
-
-    setMessage(`Medical stock saved successfully. ${data?.count || 0} rows saved.`);
-    await fetchSavedItems();
-  } catch (err) {
-    console.error(err);
-    setError(err instanceof Error ? err.message : "Failed to save stock");
-  } finally {
-    setSaving(false);
-  }
-};
+  };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -412,15 +436,17 @@ export default function MedicalStockPage() {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-slate-800">PDF Bill Preview</h3>
-            <a
-              href={billFileUrl}
-              target="_blank"
-              rel="noreferrer"
+
+            {/* CHANGED: anchor badulu button use chesanu */}
+            <button
+              type="button"
+              onClick={() => openBillUrl(billFileUrl)}
               className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
               View Uploaded Bill
-            </a>
+            </button>
           </div>
+
           <div className="overflow-hidden rounded-xl border border-slate-200">
             <iframe
               src={billFileUrl}
@@ -437,15 +463,17 @@ export default function MedicalStockPage() {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-slate-800">Image Bill Preview</h3>
-            <a
-              href={billFileUrl}
-              target="_blank"
-              rel="noreferrer"
+
+            {/* CHANGED: anchor badulu button use chesanu */}
+            <button
+              type="button"
+              onClick={() => openBillUrl(billFileUrl)}
               className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
               View Uploaded Bill
-            </a>
+            </button>
           </div>
+
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-3">
             <img
               src={billFileUrl}
@@ -494,18 +522,26 @@ export default function MedicalStockPage() {
                 </p>
               </div>
 
+              {/* CHANGED: mobile upload fix - direct button click */}
               <div className="flex flex-wrap gap-3">
-                <label className="inline-flex cursor-pointer items-center rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+                >
                   {uploading ? "Uploading..." : "Upload Bill"}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*,.pdf,application/pdf"
-                    className="hidden"
-                    onChange={handleFileInputChange}
-                    disabled={uploading}
-                  />
-                </label>
+                </button>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,.pdf,application/pdf"
+                  capture="environment"
+                  className="hidden"
+                  onChange={handleFileInputChange}
+                  disabled={uploading}
+                />
 
                 <button
                   type="button"
@@ -762,14 +798,15 @@ export default function MedicalStockPage() {
 
             {billFileUrl ? (
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <a
-                  href={billFileUrl}
-                  target="_blank"
-                  rel="noreferrer"
+                {/* CHANGED: anchor badulu button use chesanu */}
+                <button
+                  type="button"
+                  onClick={() => openBillUrl(billFileUrl)}
                   className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                 >
                   View Uploaded Bill
-                </a>
+                </button>
+
                 <button
                   type="button"
                   onClick={handleManualExcelDownload}
@@ -859,15 +896,15 @@ export default function MedicalStockPage() {
                         </p>
                       </div>
 
+                      {/* CHANGED: 404 fix kosam anchor badulu button */}
                       {item.billFileUrl ? (
-                        <a
-                          href={item.billFileUrl}
-                          target="_blank"
-                          rel="noreferrer"
+                        <button
+                          type="button"
+                          onClick={() => openBillUrl(item.billFileUrl)}
                           className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
                         >
                           View Bill
-                        </a>
+                        </button>
                       ) : null}
                     </div>
                   </div>
