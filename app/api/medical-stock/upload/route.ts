@@ -266,7 +266,7 @@ function buildExcelBase64(items: ParsedMedicineItem[], rawText: string): string 
       }))
     : [{ Line: 1, Text: "No text extracted" }];
 
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows), "OCR Raw Text");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows), "Raw Text");
 
   const out = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
   return out.toString("base64");
@@ -315,16 +315,15 @@ export async function POST(req: NextRequest) {
           parsedItems: [],
           parsedCount: 0,
           excelBase64,
-          excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
+          excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-purchase-bill.xlsx`,
           extractedText: "",
           message:
-            "PDF uploaded successfully. This PDF is scanned/image-based, so auto-parse was skipped to avoid timeout. Upload a screenshot/image of the medicine table for OCR, or use manual entry.",
+            "PDF uploaded successfully. This PDF is scanned/image-based, so auto-parse was skipped to avoid timeout. Upload a screenshot/image of the table for OCR, or use manual entry.",
         });
       }
     }
 
-    const billFileUrl = file.name;
-    const parsedItems = parsedText ? parseRowsFromText(parsedText, billFileUrl) : [];
+    const parsedItems = parsedText ? parseRowsFromText(parsedText, file.name) : [];
     const excelBase64 = buildExcelBase64(parsedItems, parsedText);
 
     return NextResponse.json({
@@ -334,7 +333,7 @@ export async function POST(req: NextRequest) {
       parsedItems,
       parsedCount: parsedItems.length,
       excelBase64,
-      excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
+      excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-purchase-bill.xlsx`,
       extractedText: parsedText.slice(0, 6000),
       message:
         parsedItems.length > 0

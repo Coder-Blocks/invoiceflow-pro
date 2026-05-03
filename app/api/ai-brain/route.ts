@@ -75,7 +75,6 @@ export async function POST(req: Request) {
       0
     );
 
-    // FIXED: fallback threshold 10
     const lowStock = stocks.filter(
       (item) =>
         Number(item.quantity || 0) <= Number(item.lowStockThreshold || 10)
