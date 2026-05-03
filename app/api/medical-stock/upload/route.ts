@@ -83,126 +83,7 @@ function extractInvoiceDate(text: string): string {
   return normalizeInvoiceDate(match?.[1] || "");
 }
 
-async function optimizeImage(buffer: Buffer): Promise<Buffer> {
-  return await sharp(buffer)
-    .rotate()
-    .resize({ width: 1800, withoutEnlargement: true })
-    .png({ quality: 100, compressionLevel: 6 })
-    .toBuffer();
-}
-
-async function callOcrSpaceWithFile(
-  fileBuffer: Buffer,
-  filename: string,
-  mimeType: string,
-  fileKind: "image" | "pdf"
-) {
-  const apiKey = process.env.OCR_SPACE_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("OCR_SPACE_API_KEY missing in environment.");
-  }
-
-  const finalBuffer =
-    fileKind === "image" ? await optimizeImage(fileBuffer) : fileBuffer;
-
-  const finalMimeType =
-    fileKind === "image" ? "image/png" : mimeType || "application/pdf";
-
-  const uint8 = new Uint8Array(finalBuffer);
-  const blob = new Blob([uint8], { type: finalMimeType });
-
-  const form = new FormData();
-  form.append("file", blob, filename);
-  form.append("language", "eng");
-  form.append("isOverlayRequired", "false");
-  form.append("scale", "true");
-  form.append("isTable", "true");
-  form.append("OCREngine", "2");
-
-  if (fileKind === "pdf") {
-    form.append("filetype", "PDF");
-  }
-
-  const res = await fetch("https://api.ocr.space/parse/image", {
-    method: "POST",
-    headers: {
-      apikey: apiKey,
-    },
-    body: form,
-  });
-
-  if (!res.ok) {
-    throw new Error(`OCR API failed with status ${res.status}`);
-  }
-
-  return await res.json();
-}
-
-function buildExcelBase64(items: ParsedMedicineItem[], rawText: string): string {
-  const wb = XLSX.utils.book_new();
-
-  const stockRows =
-    items.length > 0
-      ? items.map((item) => ({
-          "Vendor Name": item.vendorName,
-          "Invoice Number": item.invoiceNumber,
-          "Invoice Date": item.invoiceDate,
-          "Medicine Name": item.medicineName,
-          Pack: item.pack,
-          "Batch Number": item.batchNumber,
-          "Expiry Date": item.expiryDate,
-          Quantity: item.quantity,
-          MRP: item.mrp,
-          "Purchase Price": item.purchasePrice,
-          "Selling Price": item.sellingPrice,
-          "GST %": item.gstPercent,
-          "Discount %": item.discountPercent,
-          Value: item.value,
-          "Bill File URL": item.billFileUrl,
-        }))
-      : [
-          {
-            "Vendor Name": "",
-            "Invoice Number": "",
-            "Invoice Date": "",
-            "Medicine Name": "",
-            Pack: "",
-            "Batch Number": "",
-            "Expiry Date": "",
-            Quantity: "",
-            MRP: "",
-            "Purchase Price": "",
-            "Selling Price": "",
-            "GST %": "",
-            "Discount %": "",
-            Value: "",
-            "Bill File URL": "",
-          },
-        ];
-
-  const stockSheet = XLSX.utils.json_to_sheet(stockRows);
-  XLSX.utils.book_append_sheet(wb, stockSheet, "Medical Stock");
-
-  const rawRows = rawText
-    ? rawText.split(/\r?\n/).map((line, index) => ({
-        Line: index + 1,
-        Text: line,
-      }))
-    : [{ Line: 1, Text: "No OCR text extracted" }];
-
-  const rawSheet = XLSX.utils.json_to_sheet(rawRows);
-  XLSX.utils.book_append_sheet(wb, rawSheet, "OCR Raw Text");
-
-  const buffer = XLSX.write(wb, {
-    type: "buffer",
-    bookType: "xlsx",
-  });
-
-  return buffer.toString("base64");
-}
-
-function parseRowsFromOcrText(text: string, billFileUrl: string): ParsedMedicineItem[] {
+function parseRowsFromText(text: string, billFileUrl: string): ParsedMedicineItem[] {
   const vendorName = extractVendorName(text);
   const invoiceNumber = extractInvoiceNumber(text);
   const invoiceDate = extractInvoiceDate(text);
@@ -280,6 +161,117 @@ function parseRowsFromOcrText(text: string, billFileUrl: string): ParsedMedicine
   });
 }
 
+async function optimizeImage(buffer: Buffer): Promise<Buffer> {
+  return await sharp(buffer)
+    .rotate()
+    .resize({ width: 1800, withoutEnlargement: true })
+    .png({ quality: 100, compressionLevel: 6 })
+    .toBuffer();
+}
+
+async function callOcrSpaceImage(buffer: Buffer, filename: string) {
+  const apiKey = process.env.OCR_SPACE_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("OCR_SPACE_API_KEY missing in environment.");
+  }
+
+  const optimizedBuffer = await optimizeImage(buffer);
+  const uint8 = new Uint8Array(optimizedBuffer);
+  const blob = new Blob([uint8], { type: "image/png" });
+
+  const form = new FormData();
+  form.append("file", blob, filename);
+  form.append("language", "eng");
+  form.append("isOverlayRequired", "false");
+  form.append("scale", "true");
+  form.append("isTable", "true");
+  form.append("OCREngine", "2");
+
+  const res = await fetch("https://api.ocr.space/parse/image", {
+    method: "POST",
+    headers: {
+      apikey: apiKey,
+    },
+    body: form,
+  });
+
+  if (!res.ok) {
+    throw new Error(`OCR API failed with status ${res.status}`);
+  }
+
+  return await res.json();
+}
+
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  try {
+    const pdfParseModule = await import("pdf-parse");
+    const pdfParse = (pdfParseModule as any).default || pdfParseModule;
+    const result = await pdfParse(buffer);
+    return result?.text || "";
+  } catch (error) {
+    console.error("pdf-parse failed:", error);
+    return "";
+  }
+}
+
+function buildExcelBase64(items: ParsedMedicineItem[], rawText: string): string {
+  const wb = XLSX.utils.book_new();
+
+  const stockRows =
+    items.length > 0
+      ? items.map((item) => ({
+          "Vendor Name": item.vendorName,
+          "Invoice Number": item.invoiceNumber,
+          "Invoice Date": item.invoiceDate,
+          "Medicine Name": item.medicineName,
+          Pack: item.pack,
+          "Batch Number": item.batchNumber,
+          "Expiry Date": item.expiryDate,
+          Quantity: item.quantity,
+          MRP: item.mrp,
+          "Purchase Price": item.purchasePrice,
+          "Selling Price": item.sellingPrice,
+          "GST %": item.gstPercent,
+          "Discount %": item.discountPercent,
+          Value: item.value,
+          "Bill File URL": item.billFileUrl,
+        }))
+      : [
+          {
+            "Vendor Name": "",
+            "Invoice Number": "",
+            "Invoice Date": "",
+            "Medicine Name": "",
+            Pack: "",
+            "Batch Number": "",
+            "Expiry Date": "",
+            Quantity: "",
+            MRP: "",
+            "Purchase Price": "",
+            "Selling Price": "",
+            "GST %": "",
+            "Discount %": "",
+            Value: "",
+            "Bill File URL": "",
+          },
+        ];
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(stockRows), "Medical Stock");
+
+  const rawRows = rawText
+    ? rawText.split(/\r?\n/).map((line, index) => ({
+        Line: index + 1,
+        Text: line,
+      }))
+    : [{ Line: 1, Text: "No text extracted" }];
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows), "OCR Raw Text");
+
+  const out = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  return out.toString("base64");
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -301,26 +293,38 @@ export async function POST(req: NextRequest) {
     }
 
     const bytes = await file.arrayBuffer();
-    const originalBuffer = Buffer.from(bytes);
+    const buffer = Buffer.from(bytes);
 
-    const fileKind: "image" | "pdf" = isPdf ? "pdf" : "image";
+    let parsedText = "";
+    let fileKind: "image" | "pdf" = isPdf ? "pdf" : "image";
 
-    const ocrData = await callOcrSpaceWithFile(
-      originalBuffer,
-      file.name,
-      file.type,
-      fileKind
-    );
+    if (isImage) {
+      const ocrData = await callOcrSpaceImage(buffer, file.name);
+      parsedText = Array.isArray(ocrData?.ParsedResults)
+        ? ocrData.ParsedResults.map((r: any) => r?.ParsedText || "").join("\n")
+        : "";
+    } else {
+      parsedText = await extractPdfText(buffer);
 
-    const parsedText = Array.isArray(ocrData?.ParsedResults)
-      ? ocrData.ParsedResults.map((r: any) => r?.ParsedText || "").join("\n")
-      : "";
+      if (!parsedText.trim()) {
+        const excelBase64 = buildExcelBase64([], "");
+        return NextResponse.json({
+          success: true,
+          fileKind: "pdf",
+          originalFileName: file.name,
+          parsedItems: [],
+          parsedCount: 0,
+          excelBase64,
+          excelFileName: `${file.name.replace(/\.[^.]+$/, "")}-medical-stock.xlsx`,
+          extractedText: "",
+          message:
+            "PDF uploaded successfully. This PDF is scanned/image-based, so auto-parse was skipped to avoid timeout. Upload a screenshot/image of the medicine table for OCR, or use manual entry.",
+        });
+      }
+    }
 
     const billFileUrl = file.name;
-    const parsedItems = parsedText
-      ? parseRowsFromOcrText(parsedText, billFileUrl)
-      : [];
-
+    const parsedItems = parsedText ? parseRowsFromText(parsedText, billFileUrl) : [];
     const excelBase64 = buildExcelBase64(parsedItems, parsedText);
 
     return NextResponse.json({
@@ -335,9 +339,9 @@ export async function POST(req: NextRequest) {
       message:
         parsedItems.length > 0
           ? `Bill parsed successfully. ${parsedItems.length} items found.`
-          : "OCR finished, but no medicine rows could be parsed.",
-      ocrErrored: ocrData?.IsErroredOnProcessing || false,
-      ocrMessages: ocrData?.ErrorMessage || [],
+          : isPdf
+          ? "PDF uploaded successfully, but no medicine rows could be auto-parsed from extracted text."
+          : "Image OCR finished, but no medicine rows could be parsed.",
     });
   } catch (error) {
     console.error("Medical stock upload error:", error);
