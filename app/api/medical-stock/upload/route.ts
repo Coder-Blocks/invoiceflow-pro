@@ -30,7 +30,10 @@ type ParsedMedicineItem = {
 };
 
 function cleanLine(line: string): string {
-  return String(line || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+  return String(line || "")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function toNumber(value: unknown): number {
@@ -54,6 +57,7 @@ function normalizeInvoiceDate(value: string): string {
 function extractVendorName(text: string): string {
   const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
   const idx = lines.findIndex((l) => /GST INVOICE/i.test(l));
+
   if (idx >= 0) {
     for (let i = idx + 1; i < Math.min(lines.length, idx + 8); i++) {
       const line = lines[i];
@@ -65,6 +69,7 @@ function extractVendorName(text: string): string {
       }
     }
   }
+
   return lines.find((l) => /PVT LTD|LIMITED/i.test(l)) || "";
 }
 
@@ -93,7 +98,7 @@ function extractGrandTotal(text: string): number {
 }
 
 async function optimizeImage(buffer: Buffer): Promise<Buffer> {
-  return sharp(buffer)
+  return await sharp(buffer)
     .rotate()
     .resize({ width: 1800, withoutEnlargement: true })
     .png({ quality: 100, compressionLevel: 6 })
@@ -140,23 +145,85 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   }
 }
 
-// Core parser: works for the invoice text you showed
+function isItemStartLine(line: string): boolean {
+  // only serial + qty + freeqty compulsory
+  return /^\d+\s+[\d.]+\s+[\d.]+(?:\s+.*)?$/.test(line);
+}
+
+function isDetailLine(line: string): boolean {
+  return /[A-Z0-9-]{3,}\s+\d{2}\/\d{2}\s+[\d.]+\s+[\d.]+\s+\d{8}\s+[\d.]+\s+[\d.]+\s+[\d.]+$/i.test(
+    line
+  );
+}
+
+function isNoiseLine(line: string): boolean {
+  return /Qty\.|Pack|Batch No\.|Exp\.Dt\.|Gross Value|Net Value|GST Value|Amount In Words|Outstanding|Remarks|Authorised Signatory|Total Items|PhonePe|Jurisdiction|Taxable|IGST|SGST|CGST|DN\. Value|Outs :|Rounding|TCS AMT/i.test(
+    line
+  );
+}
+
+function extractPackAndName(nameLines: string[]): { pack: string; medicineName: string } {
+  const joined = nameLines.join(" ").replace(/\s+/g, " ").trim();
+
+  // remove trailing shown price like |149.0
+  const withoutShownPrice = joined.replace(/\|\s*[\d.]+\s*$/, "").trim();
+
+  const packMatch = withoutShownPrice.match(
+    /^((?:\d+(?:\.\d+)?)\s*(?:ML|GM|MG|PCS|STRIP|BOX|BOTTLE|TAB|CAP|INJ|OINT|DROP|SYR|LIQUID|S))\s+(.+)$/i
+  );
+
+  if (packMatch) {
+    return {
+      pack: packMatch[1].trim(),
+      medicineName: packMatch[2].trim(),
+    };
+  }
+
+  return {
+    pack: "",
+    medicineName: withoutShownPrice,
+  };
+}
+
+function parseDetailLine(line: string) {
+  const m = cleanLine(line).match(
+    /^(.*?)\s+([A-Z0-9-]{3,})\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/i
+  );
+
+  if (!m) return null;
+
+  return {
+    manufacturer: m[1].trim(),
+    batchNumber: m[2].trim(),
+    expiryDate: normalizeExpiry(m[3]),
+    mrp: toNumber(m[4]),
+    purchasePrice: toNumber(m[5]),
+    hsn: m[6].trim(),
+    gstPercent: toNumber(m[7]),
+    discountPercent: toNumber(m[8]),
+    value: toNumber(m[9]),
+  };
+}
+
 function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedicineItem[] {
   const vendorName = extractVendorName(text);
   const invoiceNumber = extractInvoiceNumber(text);
   const invoiceDate = extractInvoiceDate(text);
   const grandTotal = extractGrandTotal(text);
 
-  const rawLines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
+  const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
   const items: ParsedMedicineItem[] = [];
 
   let i = 0;
-  while (i < rawLines.length) {
-    const line = rawLines[i];
+  while (i < lines.length) {
+    const line = lines[i];
 
-    // Start line example:
-    // 1 1.00 0.00 30ML
-    const startMatch = line.match(/^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.+)$/);
+    if (!isItemStartLine(line)) {
+      i++;
+      continue;
+    }
+
+    const startMatch = line.match(/^(\d+)\s+([\d.]+)\s+([\d.]+)(?:\s+(.*))?$/);
     if (!startMatch) {
       i++;
       continue;
@@ -164,92 +231,74 @@ function parseMedicalInvoiceText(text: string, billFileUrl: string): ParsedMedic
 
     const quantity = toNumber(startMatch[2]);
     const freeQty = toNumber(startMatch[3]);
-    const pack = startMatch[4].trim();
+    const startRest = String(startMatch[4] || "").trim();
 
-    // name line(s) come after start line until detail line
-    const nameParts: string[] = [];
+    const collectedNameLines: string[] = [];
+    if (startRest) collectedNameLines.push(startRest);
+
     let detailLine = "";
     let j = i + 1;
 
-    while (j < rawLines.length) {
-      const next = rawLines[j];
+    while (j < lines.length) {
+      const next = lines[j];
 
-      // detail line ends with: batch expiry mrp rate hsn gst discount value
-      if (/[A-Z0-9-]{3,}\s+\d{2}\/\d{2}\s+[\d.]+\s+[\d.]+\s+\d{8}\s+[\d.]+\s+[\d.]+\s+[\d.]+$/i.test(next)) {
+      if (isDetailLine(next)) {
         detailLine = next;
         j++;
         break;
       }
 
-      // next item started
-      if (/^\d+\s+[\d.]+\s+[\d.]+\s+/.test(next)) {
+      if (isItemStartLine(next)) {
         break;
       }
 
-      // ignore obvious noise
-      if (!/Qty\.|Pack|Batch No\.|Exp\.Dt\.|Gross Value|Net Value|GST Value|Amount In Words|Outstanding|Remarks|Authorised Signatory|Total Items/i.test(next)) {
-        nameParts.push(next);
+      if (!isNoiseLine(next)) {
+        collectedNameLines.push(next);
       }
 
       j++;
     }
 
-    if (!detailLine || nameParts.length === 0) {
+    if (!detailLine) {
       i++;
       continue;
     }
 
-    let medicineName = nameParts.join(" ").replace(/\s+/g, " ").trim();
-    let mrpFromName = 0;
-
-    // Example: "ZERODOL SP TAB | 149.0"
-    const pipeMatch = medicineName.match(/^(.*?)(?:\s*\|\s*([\d.]+))$/);
-    if (pipeMatch) {
-      medicineName = pipeMatch[1].trim();
-      mrpFromName = toNumber(pipeMatch[2]);
-    }
-
-    const detailMatch = detailLine.match(
-      /^(.*?)\s+([A-Z0-9-]{3,})\s+(\d{2}\/\d{2})\s+([\d.]+)\s+([\d.]+)\s+(\d{8})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/i
-    );
-
-    if (!detailMatch) {
+    const detail = parseDetailLine(detailLine);
+    if (!detail) {
       i = j;
       continue;
     }
 
-    const manufacturer = detailMatch[1].trim();
-    const batchNumber = detailMatch[2].trim();
-    const expiryDate = normalizeExpiry(detailMatch[3]);
-    const mrp = toNumber(detailMatch[4]) || mrpFromName;
-    const purchasePrice = toNumber(detailMatch[5]);
-    const hsn = detailMatch[6].trim();
-    const gstPercent = toNumber(detailMatch[7]);
-    const discountPercent = toNumber(detailMatch[8]);
-    const value = toNumber(detailMatch[9]);
+    const { pack, medicineName } = extractPackAndName(collectedNameLines);
+
+    if (!medicineName) {
+      i = j;
+      continue;
+    }
 
     items.push({
-      medicineName,
-      batchNumber,
-      expiryDate,
+      medicineName: medicineName.substring(0, 200),
+      batchNumber: detail.batchNumber,
+      expiryDate: detail.expiryDate,
       quantity,
-      purchasePrice,
-      sellingPrice: mrp || purchasePrice,
+      purchasePrice: detail.purchasePrice,
+      sellingPrice: detail.mrp || detail.purchasePrice,
       vendorName,
       invoiceNumber,
       invoiceDate,
       pack,
-      mrp,
-      gstPercent,
-      discountPercent,
-      value,
+      mrp: detail.mrp,
+      gstPercent: detail.gstPercent,
+      discountPercent: detail.discountPercent,
+      value: detail.value,
       billFileUrl,
-      manufacturer,
+      manufacturer: detail.manufacturer,
       freeQty,
       billIssueDate: invoiceDate,
       billAmount: grandTotal,
-      totalIncGst: value,
-      hsn,
+      totalIncGst: detail.value,
+      hsn: detail.hsn,
     });
 
     i = j;
@@ -291,30 +340,12 @@ function buildExcelBase64(items: ParsedMedicineItem[], rawText: string): string 
           "Selling Price": item.sellingPrice,
           "Bill File URL": item.billFileUrl,
         }))
-      : [
-          {
-            Quantity: "",
-            "Free Qty": "",
-            Pack: "",
-            Manufacturer: "",
-            "Batch Number": "",
-            "Expiry Date": "",
-            "Medicine Cost": "",
-            MRP: "",
-            HSN: "",
-            "GST %": "",
-            Discount: "",
-            "Bill Issue Date": "",
-            "Bill Amount": "",
-            "Total Inc GST": "",
-            Medicine: "",
-            "Vendor Name": "",
-            "Invoice Number": "",
-            "Invoice Date": "",
-            "Selling Price": "",
-            "Bill File URL": "",
-          },
-        ];
+      : rawText
+      ? rawText.split(/\r?\n/).map((line, index) => ({
+          Line: index + 1,
+          Text: line,
+        }))
+      : [{ Message: "No rows parsed and no raw text found" }];
 
   XLSX.utils.book_append_sheet(
     wb,
