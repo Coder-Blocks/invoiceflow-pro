@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { ensureMedicalStockTables, getMedicalStockByKey, getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
+import { ensureMedicalStockTables, getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
 import {
   cleanString,
@@ -24,9 +24,35 @@ export async function POST(request: NextRequest) {
       jsonBody: json,
     });
 
+    const rowsInput = Array.isArray(json.rows) ? json.rows : [];
+    const nonEmptyRows = rowsInput.filter((row) => {
+      if (!row || typeof row !== "object") return false;
+      const item = row as Record<string, unknown>;
+      return (
+        String(item.medicineName ?? "").trim() ||
+        String(item.batchNumber ?? "").trim() ||
+        String(item.expiryDate ?? "").trim() ||
+        Number(item.quantity ?? 0) > 0 ||
+        Number(item.purchasePrice ?? 0) > 0 ||
+        Number(item.sellingPrice ?? 0) > 0 ||
+        String(item.vendorName ?? "").trim()
+      );
+    });
+
+    if (nonEmptyRows.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Please enter at least one medicine row before saving.",
+        },
+        { status: 400 },
+      );
+    }
+
     const parsedBody = saveMedicalStockSchema.safeParse({
       ...json,
       organizationId: organizationIdFromRequest ?? json.organizationId,
+      rows: nonEmptyRows,
     });
 
     if (!parsedBody.success) {
@@ -56,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     if (mergedRows.length === 0) {
       return NextResponse.json(
-        { success: false, message: "No valid medicine rows to save." },
+        { success: false, message: "Please enter valid medicine rows before saving." },
         { status: 400 },
       );
     }

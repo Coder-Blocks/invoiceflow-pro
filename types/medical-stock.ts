@@ -61,9 +61,3 @@ export type ListMedicalStockResponse = {
   success: boolean;
   items: MedicalStockItem[];
 };
-
-export type ExportMedicalStockBody = {
-  organizationId: string;
-  rows: MedicalStockRowInput[];
-  filename?: string;
-};

@@ -19,8 +19,6 @@ export const ALLOWED_UPLOAD_EXTENSIONS = new Set([
 
 export const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
 
-export const MEDICAL_UPLOAD_PUBLIC_DIR = "uploads/medical-stock";
-
 export const MEDICAL_STOCK_EXPORT_HEADERS = [
   "Medicine Name",
   "Batch Number",

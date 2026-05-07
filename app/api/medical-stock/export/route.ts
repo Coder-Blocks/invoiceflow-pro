@@ -37,9 +37,25 @@ export async function POST(request: NextRequest) {
     const json = (await request.json()) as Record<string, unknown>;
     const organizationId = await resolveOrganizationIdFromRequest(request, { jsonBody: json });
 
+    const rowsInput = Array.isArray(json.rows) ? json.rows : [];
+    const nonEmptyRows = rowsInput.filter((row) => {
+      if (!row || typeof row !== "object") return false;
+      const item = row as Record<string, unknown>;
+      return (
+        String(item.medicineName ?? "").trim() ||
+        String(item.batchNumber ?? "").trim() ||
+        String(item.expiryDate ?? "").trim() ||
+        Number(item.quantity ?? 0) > 0 ||
+        Number(item.purchasePrice ?? 0) > 0 ||
+        Number(item.sellingPrice ?? 0) > 0 ||
+        String(item.vendorName ?? "").trim()
+      );
+    });
+
     const parsed = exportMedicalStockSchema.safeParse({
       ...json,
       organizationId: organizationId ?? json.organizationId,
+      rows: nonEmptyRows,
     });
 
     if (!parsed.success) {

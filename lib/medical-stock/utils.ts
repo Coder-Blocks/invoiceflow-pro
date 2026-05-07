@@ -11,7 +11,7 @@ import {
   MEDICAL_STOCK_EXPIRY_WARNING_DAYS,
   MEDICAL_STOCK_LOW_STOCK_THRESHOLD,
 } from "@/lib/medical-stock/constants";
-import type { MedicalStockItem, MedicalStockRowInput } from "@/types/medical-stock";
+import type { MedicalStockRowInput } from "@/types/medical-stock";
 
 export function cleanString(value: unknown): string {
   if (typeof value !== "string") {
@@ -64,6 +64,7 @@ export function parseExpiryDateInput(value: string): Date | null {
   }
 
   const patterns = [
+    "yyyy-MM-dd",
     "dd/MM/yyyy",
     "d/M/yyyy",
     "dd/MM/yy",
@@ -83,7 +84,14 @@ export function parseExpiryDateInput(value: string): Date | null {
   for (const pattern of patterns) {
     const parsed = parse(normalized, pattern, new Date());
     if (isValid(parsed)) {
-      if (pattern === "MM/yyyy" || pattern === "M/yyyy" || pattern === "MM/yy" || pattern === "M/yy" || pattern === "MMM yyyy" || pattern === "MMMM yyyy") {
+      if (
+        pattern === "MM/yyyy" ||
+        pattern === "M/yyyy" ||
+        pattern === "MM/yy" ||
+        pattern === "M/yy" ||
+        pattern === "MMM yyyy" ||
+        pattern === "MMMM yyyy"
+      ) {
         return endOfMonth(parsed);
       }
       return parsed;
@@ -139,20 +147,19 @@ export function mergeIncomingRows(rows: MedicalStockRowInput[]): MedicalStockRow
       continue;
     }
 
-    const key = `${normalizeMedicineKey(medicineName)}__${normalizeBatchKey(batchNumber)}`;
-    const incomingDate = parseExpiryDateInput(expiryDate);
-
-    if (!incomingDate) {
+    const parsedExpiry = parseExpiryDateInput(expiryDate);
+    if (!parsedExpiry) {
       continue;
     }
 
+    const key = `${normalizeMedicineKey(medicineName)}__${normalizeBatchKey(batchNumber)}`;
     const existing = map.get(key);
 
     if (!existing) {
       map.set(key, {
         medicineName,
         batchNumber,
-        expiryDate: formatDateToISO(incomingDate),
+        expiryDate: formatDateToISO(parsedExpiry),
         quantity,
         purchasePrice,
         sellingPrice,
@@ -162,14 +169,14 @@ export function mergeIncomingRows(rows: MedicalStockRowInput[]): MedicalStockRow
       continue;
     }
 
-    const existingDate = parseExpiryDateInput(existing.expiryDate);
-    const chosenDate =
-      existingDate && incomingDate > existingDate ? incomingDate : existingDate ?? incomingDate;
+    const existingExpiry = parseExpiryDateInput(existing.expiryDate);
+    const chosenExpiry =
+      existingExpiry && parsedExpiry > existingExpiry ? parsedExpiry : existingExpiry ?? parsedExpiry;
 
     map.set(key, {
       medicineName: existing.medicineName || medicineName,
       batchNumber: existing.batchNumber || batchNumber,
-      expiryDate: formatDateToISO(chosenDate),
+      expiryDate: formatDateToISO(chosenExpiry),
       quantity: safeInteger(existing.quantity) + quantity,
       purchasePrice: purchasePrice > 0 ? purchasePrice : safeNumber(existing.purchasePrice),
       sellingPrice: sellingPrice > 0 ? sellingPrice : safeNumber(existing.sellingPrice),
@@ -179,40 +186,4 @@ export function mergeIncomingRows(rows: MedicalStockRowInput[]): MedicalStockRow
   }
 
   return Array.from(map.values());
-}
-
-export function serializeMedicalStockRecord(record: {
-  id: string;
-  organizationId: string;
-  medicineName: string;
-  batchNumber: string;
-  expiryDate: Date;
-  quantity: number;
-  purchasePrice: { toString(): string } | number;
-  sellingPrice: { toString(): string } | number;
-  vendorName: string;
-  billFileUrl: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): MedicalStockItem {
-  const expiryMeta = getExpiryMeta(record.expiryDate);
-
-  return {
-    id: record.id,
-    organizationId: record.organizationId,
-    medicineName: record.medicineName,
-    batchNumber: record.batchNumber,
-    expiryDate: formatDateToISO(record.expiryDate),
-    quantity: record.quantity,
-    purchasePrice: Number(record.purchasePrice.toString()),
-    sellingPrice: Number(record.sellingPrice.toString()),
-    vendorName: record.vendorName,
-    billFileUrl: record.billFileUrl,
-    createdAt: record.createdAt.toISOString(),
-    updatedAt: record.updatedAt.toISOString(),
-    isLowStock: isLowStock(record.quantity),
-    isExpired: expiryMeta.isExpired,
-    expiresIn30Days: expiryMeta.expiresIn30Days,
-    daysToExpiry: expiryMeta.daysToExpiry,
-  };
 }

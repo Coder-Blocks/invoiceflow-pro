@@ -75,6 +75,18 @@ async function readJsonSafely<T>(response: Response): Promise<T | null> {
   }
 }
 
+function isRowCompletelyEmpty(row: MedicalStockRowInput) {
+  return !(
+    String(row.medicineName || "").trim() ||
+    String(row.batchNumber || "").trim() ||
+    String(row.expiryDate || "").trim() ||
+    Number(row.quantity || 0) > 0 ||
+    Number(row.purchasePrice || 0) > 0 ||
+    Number(row.sellingPrice || 0) > 0 ||
+    String(row.vendorName || "").trim()
+  );
+}
+
 export default function MedicalStockClient() {
   const [rows, setRows] = useState<MedicalStockRowInput[]>([emptyRow()]);
   const [stockItems, setStockItems] = useState<MedicalStockItem[]>([]);
@@ -98,7 +110,6 @@ export default function MedicalStockClient() {
 
   useEffect(() => {
     if (!previewBill) return;
-
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
@@ -126,9 +137,7 @@ export default function MedicalStockClient() {
       const data = await readJsonSafely<ListMedicalStockResponse & { message?: string }>(response);
 
       if (!response.ok || !data?.success) {
-        throw new Error(
-          data?.message || "Failed to fetch stock list. Please make sure you are logged in.",
-        );
+        throw new Error(data?.message || "Failed to fetch stock list.");
       }
 
       setStockItems(data.items);
@@ -140,12 +149,14 @@ export default function MedicalStockClient() {
   }
 
   function addRow() {
-    setRows((prev) => [...prev, emptyRow()]);
+    setRows((prev) => [...prev, { ...emptyRow(), billFileUrl: currentBillUrl || null }]);
   }
 
   function removeRow(index: number) {
     setRows((prev) => {
-      if (prev.length === 1) return [emptyRow()];
+      if (prev.length === 1) {
+        return [{ ...emptyRow(), billFileUrl: currentBillUrl || null }];
+      }
       return prev.filter((_, i) => i !== index);
     });
   }
@@ -184,9 +195,7 @@ export default function MedicalStockClient() {
       const data = await readJsonSafely<UploadMedicalBillResponse & { message?: string }>(response);
 
       if (!response.ok || !data?.success) {
-        throw new Error(
-          data?.message || "Upload failed. Please make sure your workspace is selected.",
-        );
+        throw new Error(data?.message || "Upload failed.");
       }
 
       setMessage(data.message);
@@ -198,12 +207,12 @@ export default function MedicalStockClient() {
         setRows(data.extractedRows);
         await downloadExcel(data.extractedRows, "medical-stock-uploaded-bill");
       } else {
-        setRows((prev) =>
-          prev.map((row) => ({
-            ...row,
+        setRows([
+          {
+            ...emptyRow(),
             billFileUrl: data.bill.fileUrl,
-          })),
-        );
+          },
+        ]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
@@ -218,28 +227,32 @@ export default function MedicalStockClient() {
     setError("");
 
     try {
-      const payload = {
-        billId: selectedBillId || undefined,
-        rows: rows.map((row) => ({
+      const validRows = rows
+        .map((row) => ({
           ...row,
           billFileUrl: row.billFileUrl || currentBillUrl || null,
-        })),
-      };
+        }))
+        .filter((row) => !isRowCompletelyEmpty(row));
+
+      if (validRows.length === 0) {
+        throw new Error("Please enter at least one medicine row before saving.");
+      }
 
       const response = await fetch("/api/medical-stock/save", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          billId: selectedBillId || undefined,
+          rows: validRows,
+        }),
       });
 
       const data = await readJsonSafely<SaveMedicalStockResponse & { message?: string }>(response);
 
       if (!response.ok || !data?.success) {
-        throw new Error(
-          data?.message || "Save failed. Please make sure you are logged in to a workspace.",
-        );
+        throw new Error(data?.message || "Save failed.");
       }
 
       setMessage(data.message);
@@ -258,13 +271,19 @@ export default function MedicalStockClient() {
 
   async function downloadExcel(exportRows: MedicalStockRowInput[], filename: string) {
     try {
+      const validRows = exportRows.filter((row) => !isRowCompletelyEmpty(row));
+
+      if (validRows.length === 0) {
+        throw new Error("Please enter at least one medicine row before downloading Excel.");
+      }
+
       const response = await fetch("/api/medical-stock/export", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          rows: exportRows.map((row) => ({
+          rows: validRows.map((row) => ({
             ...row,
             billFileUrl: row.billFileUrl || currentBillUrl || null,
           })),
@@ -761,7 +780,7 @@ export default function MedicalStockClient() {
                 <h3 className="text-lg font-semibold text-slate-900">
                   {previewBill.title || "Bill Preview"}
                 </h3>
-                <p className="text-sm text-slate-500 break-all">{previewBill.url}</p>
+                <p className="break-all text-sm text-slate-500">{previewBill.url}</p>
               </div>
 
               <button

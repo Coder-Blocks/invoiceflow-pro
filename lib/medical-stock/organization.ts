@@ -26,9 +26,6 @@ async function resolveOrganizationIdFromSession(request: NextRequest): Promise<s
         where: {
           userId: tokenSub,
         },
-        orderBy: {
-          createdAt: "asc",
-        },
         select: {
           organizationId: true,
         },
@@ -45,9 +42,6 @@ async function resolveOrganizationIdFromSession(request: NextRequest): Promise<s
           user: {
             email: tokenEmail,
           },
-        },
-        orderBy: {
-          createdAt: "asc",
         },
         select: {
           organizationId: true,
@@ -98,10 +92,5 @@ export async function resolveOrganizationIdFromRequest(
     return manualOrganizationId;
   }
 
-  const sessionOrganizationId = await resolveOrganizationIdFromSession(request);
-  if (sessionOrganizationId) {
-    return sessionOrganizationId;
-  }
-
-  return null;
+  return await resolveOrganizationIdFromSession(request);
 }
