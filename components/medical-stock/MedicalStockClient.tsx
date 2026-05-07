@@ -9,10 +9,6 @@ import type {
   ListMedicalStockResponse,
 } from "@/types/medical-stock";
 
-type MedicalStockClientProps = {
-  initialOrganizationId?: string;
-};
-
 type PreviewBill = {
   url: string;
   mimeType?: string;
@@ -49,16 +45,18 @@ function getFileType(url: string | null | undefined) {
   if (!url) return "unknown";
   const lower = url.toLowerCase();
   if (lower.endsWith(".pdf")) return "pdf";
-  if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp")) {
+  if (
+    lower.endsWith(".png") ||
+    lower.endsWith(".jpg") ||
+    lower.endsWith(".jpeg") ||
+    lower.endsWith(".webp")
+  ) {
     return "image";
   }
   return "unknown";
 }
 
-export default function MedicalStockClient({
-  initialOrganizationId = "",
-}: MedicalStockClientProps) {
-  const [organizationId, setOrganizationId] = useState(initialOrganizationId);
+export default function MedicalStockClient() {
   const [rows, setRows] = useState<MedicalStockRowInput[]>([emptyRow()]);
   const [stockItems, setStockItems] = useState<MedicalStockItem[]>([]);
   const [search, setSearch] = useState("");
@@ -76,9 +74,8 @@ export default function MedicalStockClient({
   const [previewBill, setPreviewBill] = useState<PreviewBill | null>(null);
 
   useEffect(() => {
-    if (!organizationId) return;
     void fetchStockList();
-  }, [organizationId]);
+  }, []);
 
   useEffect(() => {
     if (!previewBill) return;
@@ -92,14 +89,11 @@ export default function MedicalStockClient({
   }, [previewBill]);
 
   async function fetchStockList() {
-    if (!organizationId.trim()) return;
-
     setLoadingList(true);
     setError("");
 
     try {
       const query = new URLSearchParams({
-        organizationId: organizationId.trim(),
         search: search.trim(),
         lowStockOnly: String(lowStockOnly),
         expiryOnly: String(expiryOnly),
@@ -113,7 +107,9 @@ export default function MedicalStockClient({
       const data = (await response.json()) as ListMedicalStockResponse & { message?: string };
 
       if (!response.ok || !data.success) {
-        throw new Error(data.message || "Failed to fetch stock list.");
+        throw new Error(
+          data.message || "Failed to fetch stock list. Please make sure you are logged in.",
+        );
       }
 
       setStockItems(data.items);
@@ -152,11 +148,6 @@ export default function MedicalStockClient({
   }
 
   async function handleUpload(file: File) {
-    if (!organizationId.trim()) {
-      setError("Please enter Organization ID before uploading.");
-      return;
-    }
-
     setUploading(true);
     setMessage("");
     setError("");
@@ -165,7 +156,6 @@ export default function MedicalStockClient({
     try {
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("organizationId", organizationId.trim());
 
       const response = await fetch("/api/medical-stock/upload", {
         method: "POST",
@@ -175,7 +165,9 @@ export default function MedicalStockClient({
       const data = (await response.json()) as UploadMedicalBillResponse & { message?: string };
 
       if (!response.ok || !data.success) {
-        throw new Error(data.message || "Upload failed.");
+        throw new Error(
+          data.message || "Upload failed. Please make sure your workspace is selected.",
+        );
       }
 
       setMessage(data.message);
@@ -202,18 +194,12 @@ export default function MedicalStockClient({
   }
 
   async function handleSaveStock() {
-    if (!organizationId.trim()) {
-      setError("Please enter Organization ID before saving.");
-      return;
-    }
-
     setSaving(true);
     setMessage("");
     setError("");
 
     try {
       const payload = {
-        organizationId: organizationId.trim(),
         billId: selectedBillId || undefined,
         rows: rows.map((row) => ({
           ...row,
@@ -232,7 +218,9 @@ export default function MedicalStockClient({
       const data = (await response.json()) as SaveMedicalStockResponse & { message?: string };
 
       if (!response.ok || !data.success) {
-        throw new Error(data.message || "Save failed.");
+        throw new Error(
+          data.message || "Save failed. Please make sure you are logged in to a workspace.",
+        );
       }
 
       setMessage(data.message);
@@ -250,11 +238,6 @@ export default function MedicalStockClient({
   }
 
   async function downloadExcel(exportRows: MedicalStockRowInput[], filename: string) {
-    if (!organizationId.trim()) {
-      setError("Please enter Organization ID before export.");
-      return;
-    }
-
     try {
       const response = await fetch("/api/medical-stock/export", {
         method: "POST",
@@ -262,7 +245,6 @@ export default function MedicalStockClient({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          organizationId: organizationId.trim(),
           rows: exportRows.map((row) => ({
             ...row,
             billFileUrl: row.billFileUrl || currentBillUrl || null,
@@ -306,18 +288,6 @@ export default function MedicalStockClient({
               Upload bills, extract medicine rows safely, update stock automatically, and export Excel.
             </p>
           </div>
-
-          <div className="w-full max-w-md">
-            <label className="mb-2 block text-sm font-medium text-slate-700">
-              Organization ID
-            </label>
-            <input
-              value={organizationId}
-              onChange={(e) => setOrganizationId(e.target.value)}
-              placeholder="Enter organization ID"
-              className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none ring-0 transition focus:border-slate-900"
-            />
-          </div>
         </div>
       </div>
 
@@ -334,7 +304,7 @@ export default function MedicalStockClient({
       )}
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <div className="xl:col-span-2 space-y-6">
+        <div className="space-y-6 xl:col-span-2">
           <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -509,9 +479,10 @@ export default function MedicalStockClient({
                               onClick={() =>
                                 setPreviewBill({
                                   url: row.billFileUrl || currentBillUrl || "",
-                                  mimeType: getFileType(row.billFileUrl || currentBillUrl || "") === "pdf"
-                                    ? "application/pdf"
-                                    : currentBillMimeType,
+                                  mimeType:
+                                    getFileType(row.billFileUrl || currentBillUrl || "") === "pdf"
+                                      ? "application/pdf"
+                                      : currentBillMimeType,
                                   title: "Bill Preview",
                                 })
                               }
@@ -624,17 +595,8 @@ export default function MedicalStockClient({
           <button
             type="button"
             onClick={async () => {
-              if (!organizationId.trim()) {
-                setError("Please enter Organization ID before export.");
-                return;
-              }
-
               try {
-                const query = new URLSearchParams({
-                  organizationId: organizationId.trim(),
-                });
-
-                const response = await fetch(`/api/medical-stock/export?${query.toString()}`, {
+                const response = await fetch(`/api/medical-stock/export`, {
                   method: "GET",
                 });
 
