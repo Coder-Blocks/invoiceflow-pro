@@ -205,14 +205,9 @@ function lineLooksLikeMedicine(line: string): boolean {
     "upi",
   ];
 
-  if (ignored.some((word) => lower.includes(word))) {
-    return false;
-  }
+  if (ignored.some((word) => lower.includes(word))) return false;
 
-  const hasAlpha = /[a-z]/i.test(line);
-  const hasAnyNumber = /\d/.test(line);
-
-  return hasAlpha && hasAnyNumber;
+  return /[a-z]/i.test(line) && /\d/.test(line);
 }
 
 function parseMedicalRowsFromText(text: string): MedicalStockRowInput[] {
@@ -276,7 +271,16 @@ export async function parseUploadedMedicalBill(params: {
 }): Promise<ParseBillResult> {
   const { file, mimeType } = params;
 
-  if (!mimeType.startsWith("image/") && mimeType !== "application/pdf") {
+  if (mimeType === "application/pdf") {
+    return {
+      rows: [],
+      parseStatus: "UNSUPPORTED",
+      parseMessage:
+        "PDF uploaded successfully. Automatic PDF extraction is disabled for stable deployment. Please review manually.",
+    };
+  }
+
+  if (!mimeType.startsWith("image/")) {
     return {
       rows: [],
       parseStatus: "UNSUPPORTED",
@@ -293,14 +297,14 @@ export async function parseUploadedMedicalBill(params: {
         rows: [],
         parseStatus: "FAILED",
         parseMessage:
-          "Bill uploaded successfully, but no medicine rows were extracted. Please review manually.",
+          "Image uploaded successfully, but no medicine rows were extracted. Please review manually.",
       };
     }
 
     return {
       rows,
       parseStatus: "SUCCESS",
-      parseMessage: `Bill uploaded successfully. ${rows.length} medicine row(s) extracted automatically.`,
+      parseMessage: `Image uploaded successfully. ${rows.length} medicine row(s) extracted automatically.`,
     };
   } catch (error) {
     return {
@@ -308,8 +312,8 @@ export async function parseUploadedMedicalBill(params: {
       parseStatus: "FAILED",
       parseMessage:
         error instanceof Error
-          ? `Bill uploaded successfully, but OCR failed: ${error.message}`
-          : "Bill uploaded successfully, but OCR failed. Please review manually.",
+          ? `Image uploaded successfully, but OCR failed: ${error.message}`
+          : "Image uploaded successfully, but OCR failed. Please review manually.",
     };
   }
 }

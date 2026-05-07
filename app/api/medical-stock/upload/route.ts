@@ -9,7 +9,7 @@ import type { UploadMedicalBillResponse } from "@/types/medical-stock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 20;
 
 export async function POST(request: NextRequest) {
   try {
