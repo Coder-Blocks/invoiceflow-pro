@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
@@ -16,7 +15,10 @@ export async function POST(request: NextRequest) {
 
     if (!organizationId) {
       return NextResponse.json(
-        { success: false, message: "Organization ID is required." },
+        {
+          success: false,
+          message: "Unable to detect workspace organization. Please login again and retry.",
+        },
         { status: 400 },
       );
     }
@@ -30,10 +32,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const stored = await storeMedicalUploadFile(incoming);
-    const fileBuffer = await readFile(stored.absoluteFilePath);
+    const stored = await storeMedicalUploadFile({
+      file: incoming,
+      organizationId,
+    });
+
+    const buffer = Buffer.from(await incoming.arrayBuffer());
+
     const parsed = await parseUploadedMedicalBill({
-      buffer: fileBuffer,
+      buffer,
       mimeType: stored.mimeType,
     });
 
