@@ -48,6 +48,7 @@ export type UploadMedicalBillResponse = {
   message: string;
   bill: UploadedMedicalBillItem;
   extractedRows: MedicalStockRowInput[];
+  autoSavedCount?: number;
 };
 
 export type SaveMedicalStockResponse = {

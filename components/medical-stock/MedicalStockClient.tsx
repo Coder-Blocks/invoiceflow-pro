@@ -199,21 +199,21 @@ export default function MedicalStockClient() {
       }
 
       setMessage(data.message);
-      setSelectedBillId(data.bill.id);
-      setCurrentBillUrl(data.bill.fileUrl);
-      setCurrentBillMimeType(data.bill.mimeType);
+setSelectedBillId(data.bill.id);
+setCurrentBillUrl(data.bill.fileUrl);
+setCurrentBillMimeType(data.bill.mimeType);
 
-      if (data.extractedRows.length > 0) {
-        setRows(data.extractedRows);
-        await downloadExcel(data.extractedRows, "medical-stock-uploaded-bill");
-      } else {
-        setRows([
-          {
-            ...emptyRow(),
-            billFileUrl: data.bill.fileUrl,
-          },
-        ]);
-      }
+if (data.extractedRows.length > 0) {
+  setRows(data.extractedRows);
+  await fetchStockList();
+} else {
+  setRows([
+    {
+      ...emptyRow(),
+      billFileUrl: data.bill.fileUrl,
+    },
+  ]);
+}
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {

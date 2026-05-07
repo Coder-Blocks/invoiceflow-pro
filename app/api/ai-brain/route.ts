@@ -1,12 +1,23 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireActiveOrganization } from "@/lib/active-organization";
+import { getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
 
 export const runtime = "nodejs";
 
 function money(value: number) {
   return `₹${Number(value || 0).toFixed(2)}`;
 }
+
+type UnifiedStock = {
+  medicineName: string;
+  quantity: number;
+  expiryDate: Date;
+  purchasePrice: number;
+  lowStockThreshold: number;
+  unitType?: string;
+  source: "medical-stock" | "legacy-stock";
+};
 
 export async function POST(req: Request) {
   try {
@@ -19,11 +30,11 @@ export async function POST(req: Request) {
     if (!question) {
       return NextResponse.json(
         { success: false, error: "Question is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const [invoices, payments, expenses, sales, stocks, salarySlips] =
+    const [invoices, payments, expenses, sales, legacyStocks, salarySlips, medicalRows] =
       await Promise.all([
         prisma.invoice.findMany({ where: { organizationId } }),
         prisma.payment.findMany({ where: { organizationId } }),
@@ -31,56 +42,80 @@ export async function POST(req: Request) {
         prisma.medicineSale.findMany({ where: { organizationId } }),
         prisma.medicineStock.findMany({ where: { organizationId } }),
         prisma.salarySlip.findMany({ where: { organizationId } }),
+        getMedicalStockRowsByOrganization(organizationId),
       ]);
+
+    const normalizedMedicalStocks: UnifiedStock[] = medicalRows.map((row) => {
+      const item = mapMedicalStockRow(row);
+      return {
+        medicineName: item.medicineName,
+        quantity: Number(item.quantity || 0),
+        expiryDate: new Date(item.expiryDate),
+        purchasePrice: Number(item.purchasePrice || 0),
+        lowStockThreshold: 10,
+        unitType: "UNIT",
+        source: "medical-stock",
+      };
+    });
+
+    const normalizedLegacyStocks: UnifiedStock[] = legacyStocks.map((item) => ({
+      medicineName: item.medicineName,
+      quantity: Number(item.quantity || 0),
+      expiryDate: new Date(item.expiryDate),
+      purchasePrice: Number(item.costPrice || 0),
+      lowStockThreshold: Number(item.lowStockThreshold || 10),
+      unitType: item.unitType || "UNIT",
+      source: "legacy-stock",
+    }));
+
+    const stocks: UnifiedStock[] =
+      normalizedMedicalStocks.length > 0 ? normalizedMedicalStocks : normalizedLegacyStocks;
 
     const invoiceValue = invoices.reduce(
       (sum, item) => sum + Number(item.totalAmount || 0),
-      0
+      0,
     );
 
     const collected = payments.reduce(
       (sum, item) => sum + Number(item.amount || 0),
-      0
+      0,
     );
 
     const outstanding = invoices.reduce(
       (sum, item) => sum + Number(item.balanceDue || 0),
-      0
+      0,
     );
 
     const expenseValue = expenses.reduce(
       (sum, item) => sum + Number(item.amount || 0),
-      0
+      0,
     );
 
     const payrollCost = salarySlips.reduce(
       (sum, item) => sum + Number(item.netSalary || 0),
-      0
+      0,
     );
 
     const salesValue = sales.reduce(
       (sum, item) => sum + Number(item.saleAmount || 0),
-      0
+      0,
     );
 
     const salesCost = sales.reduce(
       (sum, item) => sum + Number(item.costAmount || 0),
-      0
+      0,
     );
 
     const salesProfit = salesValue - salesCost;
     const netProfit = collected + salesProfit - expenseValue - payrollCost;
 
     const stockValue = stocks.reduce(
-      (sum, item) =>
-        sum + Number(item.quantity || 0) * Number(item.costPrice || 0),
-      0
+      (sum, item) => sum + Number(item.quantity || 0) * Number(item.purchasePrice || 0),
+      0,
     );
 
-    // FIXED: fallback threshold should be 10, not 0
     const lowStock = stocks.filter(
-      (item) =>
-        Number(item.quantity || 0) <= Number(item.lowStockThreshold || 10)
+      (item) => Number(item.quantity || 0) <= Number(item.lowStockThreshold || 10),
     );
 
     const today = new Date();
@@ -137,7 +172,7 @@ ${
             .slice(0, 15)
             .map(
               (item) =>
-                `• ${item.medicineName} - Qty: ${item.quantity} ${item.unitType || "UNIT"}`
+                `• ${item.medicineName} - Qty: ${item.quantity} ${item.unitType || "UNIT"}`,
             )
             .join("\n");
       }
@@ -157,7 +192,7 @@ ${
               (item) =>
                 `• ${item.medicineName} - ${new Date(item.expiryDate)
                   .toISOString()
-                  .slice(0, 10)}`
+                  .slice(0, 10)}`,
             )
             .join("\n");
       }
@@ -191,6 +226,9 @@ ${
 
 Low stock items: ${lowStock.length}
 Expiring soon items: ${expiringSoon.length}
+Inventory source: ${
+        normalizedMedicalStocks.length > 0 ? "Medical Stock module" : "Legacy medicine stock"
+      }
 
 ${
   lowStock.length > 0
@@ -222,7 +260,10 @@ Generated salary slips: ${salarySlips.length}.`;
 * Net profit: ${money(netProfit)}
 * Stock value: ${money(stockValue)}
 * Low stock items: ${lowStock.length}
-* Expiring soon items: ${expiringSoon.length}`;
+* Expiring soon items: ${expiringSoon.length}
+* Inventory source: ${
+        normalizedMedicalStocks.length > 0 ? "Medical Stock module" : "Legacy medicine stock"
+      }`;
     } else {
       answer = `I can analyze your business data.
 
@@ -244,7 +285,7 @@ Try asking:
 
     return NextResponse.json(
       { success: false, error: "AI chat failed" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

@@ -4,6 +4,7 @@ import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organizati
 import { parseUploadedMedicalBill } from "@/lib/medical-stock/parser";
 import { storeMedicalUploadFile } from "@/lib/medical-stock/storage";
 import { insertUploadedMedicalBill } from "@/lib/medical-stock/db";
+import { persistMedicalStockRows } from "@/lib/medical-stock/persist";
 import type { UploadMedicalBillResponse } from "@/types/medical-stock";
 
 export const runtime = "nodejs";
@@ -42,10 +43,8 @@ export async function POST(request: NextRequest) {
       organizationId,
     });
 
-    const buffer = Buffer.from(await incoming.arrayBuffer());
-
     const parsed = await parseUploadedMedicalBill({
-      buffer,
+      file: incoming,
       mimeType: stored.mimeType,
     });
 
@@ -53,6 +52,13 @@ export async function POST(request: NextRequest) {
       ...row,
       billFileUrl: stored.publicFileUrl,
     }));
+
+    let autoSavedCount = 0;
+
+    if (rowsWithBillUrl.length > 0) {
+      const persisted = await persistMedicalStockRows(organizationId, rowsWithBillUrl);
+      autoSavedCount = persisted.savedCount;
+    }
 
     const billId = randomUUID();
 
@@ -65,13 +71,19 @@ export async function POST(request: NextRequest) {
       fileSize: stored.size,
       fileUrl: stored.publicFileUrl,
       parseStatus: parsed.parseStatus,
-      parseMessage: parsed.parseMessage,
+      parseMessage:
+        rowsWithBillUrl.length > 0
+          ? `${parsed.parseMessage} Stock updated automatically for ${autoSavedCount} row(s).`
+          : parsed.parseMessage,
       extractedRows: rowsWithBillUrl,
     });
 
     const response: UploadMedicalBillResponse = {
       success: true,
-      message: parsed.parseMessage,
+      message:
+        rowsWithBillUrl.length > 0
+          ? `${parsed.parseMessage} Stock updated automatically for ${autoSavedCount} row(s).`
+          : parsed.parseMessage,
       bill: {
         id: bill.id,
         organizationId: bill.organizationId,
@@ -87,6 +99,7 @@ export async function POST(request: NextRequest) {
         updatedAt: new Date(bill.updatedAt).toISOString(),
       },
       extractedRows: rowsWithBillUrl,
+      autoSavedCount,
     };
 
     return NextResponse.json(response, { status: 200 });
