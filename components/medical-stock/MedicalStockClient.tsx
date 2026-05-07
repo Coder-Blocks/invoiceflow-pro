@@ -44,16 +44,35 @@ function formatDateDisplay(value: string) {
 function getFileType(url: string | null | undefined) {
   if (!url) return "unknown";
   const lower = url.toLowerCase();
-  if (lower.endsWith(".pdf")) return "pdf";
+  if (lower.includes(".pdf")) return "pdf";
   if (
-    lower.endsWith(".png") ||
-    lower.endsWith(".jpg") ||
-    lower.endsWith(".jpeg") ||
-    lower.endsWith(".webp")
+    lower.includes(".png") ||
+    lower.includes(".jpg") ||
+    lower.includes(".jpeg") ||
+    lower.includes(".webp")
   ) {
     return "image";
   }
   return "unknown";
+}
+
+async function readJsonSafely<T>(response: Response): Promise<T | null> {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+
+  if (!text) {
+    return null;
+  }
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(text || "Server returned a non-JSON response.");
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(text || "Invalid JSON response received from server.");
+  }
 }
 
 export default function MedicalStockClient() {
@@ -104,11 +123,11 @@ export default function MedicalStockClient() {
         cache: "no-store",
       });
 
-      const data = (await response.json()) as ListMedicalStockResponse & { message?: string };
+      const data = await readJsonSafely<ListMedicalStockResponse & { message?: string }>(response);
 
-      if (!response.ok || !data.success) {
+      if (!response.ok || !data?.success) {
         throw new Error(
-          data.message || "Failed to fetch stock list. Please make sure you are logged in.",
+          data?.message || "Failed to fetch stock list. Please make sure you are logged in.",
         );
       }
 
@@ -162,11 +181,11 @@ export default function MedicalStockClient() {
         body: formData,
       });
 
-      const data = (await response.json()) as UploadMedicalBillResponse & { message?: string };
+      const data = await readJsonSafely<UploadMedicalBillResponse & { message?: string }>(response);
 
-      if (!response.ok || !data.success) {
+      if (!response.ok || !data?.success) {
         throw new Error(
-          data.message || "Upload failed. Please make sure your workspace is selected.",
+          data?.message || "Upload failed. Please make sure your workspace is selected.",
         );
       }
 
@@ -215,11 +234,11 @@ export default function MedicalStockClient() {
         body: JSON.stringify(payload),
       });
 
-      const data = (await response.json()) as SaveMedicalStockResponse & { message?: string };
+      const data = await readJsonSafely<SaveMedicalStockResponse & { message?: string }>(response);
 
-      if (!response.ok || !data.success) {
+      if (!response.ok || !data?.success) {
         throw new Error(
-          data.message || "Save failed. Please make sure you are logged in to a workspace.",
+          data?.message || "Save failed. Please make sure you are logged in to a workspace.",
         );
       }
 
@@ -254,7 +273,7 @@ export default function MedicalStockClient() {
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { message?: string } | null;
+        const data = await readJsonSafely<{ message?: string }>(response);
         throw new Error(data?.message || "Export failed.");
       }
 
@@ -272,9 +291,7 @@ export default function MedicalStockClient() {
     }
   }
 
-  const filteredLocalRows = useMemo(() => {
-    return rows;
-  }, [rows]);
+  const filteredLocalRows = useMemo(() => rows, [rows]);
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -471,7 +488,7 @@ export default function MedicalStockClient() {
                             value={row.billFileUrl || currentBillUrl || ""}
                             onChange={(e) => updateRow(index, "billFileUrl", e.target.value)}
                             className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-900"
-                            placeholder="/uploads/medical-stock/file.pdf"
+                            placeholder="Bill file URL"
                           />
                           {(row.billFileUrl || currentBillUrl) && (
                             <button
@@ -596,12 +613,12 @@ export default function MedicalStockClient() {
             type="button"
             onClick={async () => {
               try {
-                const response = await fetch(`/api/medical-stock/export`, {
+                const response = await fetch("/api/medical-stock/export", {
                   method: "GET",
                 });
 
                 if (!response.ok) {
-                  const data = (await response.json().catch(() => null)) as { message?: string } | null;
+                  const data = await readJsonSafely<{ message?: string }>(response);
                   throw new Error(data?.message || "Failed to export stock.");
                 }
 
@@ -744,7 +761,7 @@ export default function MedicalStockClient() {
                 <h3 className="text-lg font-semibold text-slate-900">
                   {previewBill.title || "Bill Preview"}
                 </h3>
-                <p className="text-sm text-slate-500">{previewBill.url}</p>
+                <p className="text-sm text-slate-500 break-all">{previewBill.url}</p>
               </div>
 
               <button
@@ -757,7 +774,7 @@ export default function MedicalStockClient() {
             </div>
 
             <div className="h-[75vh] overflow-auto bg-slate-50 p-4">
-              {previewBill.mimeType === "application/pdf" || previewBill.url.toLowerCase().endsWith(".pdf") ? (
+              {previewBill.mimeType === "application/pdf" || previewBill.url.toLowerCase().includes(".pdf") ? (
                 <iframe
                   src={previewBill.url}
                   title="PDF Preview"

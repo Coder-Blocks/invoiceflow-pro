@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
-import { serializeMedicalStockRecord } from "@/lib/medical-stock/utils";
+import {
+  getMedicalStockRowsByOrganization,
+  mapMedicalStockRow,
+} from "@/lib/medical-stock/db";
 import type { ListMedicalStockResponse } from "@/types/medical-stock";
 
 export const runtime = "nodejs";
@@ -13,7 +15,7 @@ export async function GET(request: NextRequest) {
 
     if (!organizationId) {
       return NextResponse.json(
-        { success: false, message: "Organization ID is required." },
+        { success: false, message: "Unable to detect workspace organization." },
         { status: 400 },
       );
     }
@@ -22,30 +24,16 @@ export async function GET(request: NextRequest) {
     const lowStockOnly = request.nextUrl.searchParams.get("lowStockOnly") === "true";
     const expiryOnly = request.nextUrl.searchParams.get("expiryOnly") === "true";
 
-    const records = await prisma.medicalStock.findMany({
-      where: {
-        organizationId,
-      },
-      orderBy: [
-        { updatedAt: "desc" },
-        { createdAt: "desc" },
-      ],
-    });
-
-    let items = records.map(serializeMedicalStockRecord);
+    const rows = await getMedicalStockRowsByOrganization(organizationId);
+    let items = rows.map(mapMedicalStockRow);
 
     if (search) {
-      items = items.filter((item) => {
-        const haystack = [
-          item.medicineName,
-          item.batchNumber,
-          item.vendorName,
-        ]
+      items = items.filter((item) =>
+        [item.medicineName, item.batchNumber, item.vendorName]
           .join(" ")
-          .toLowerCase();
-
-        return haystack.includes(search);
-      });
+          .toLowerCase()
+          .includes(search),
+      );
     }
 
     if (lowStockOnly) {

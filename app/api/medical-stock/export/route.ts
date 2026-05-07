@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import { prisma } from "@/lib/prisma";
 import { MEDICAL_STOCK_EXPORT_HEADERS } from "@/lib/medical-stock/constants";
+import { getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
-import { serializeMedicalStockRecord } from "@/lib/medical-stock/utils";
 import { exportMedicalStockSchema } from "@/lib/medical-stock/validators";
 
 export const runtime = "nodejs";
@@ -118,17 +117,13 @@ export async function GET(request: NextRequest) {
 
     if (!organizationId) {
       return NextResponse.json(
-        { success: false, message: "Organization ID is required." },
+        { success: false, message: "Unable to detect workspace organization." },
         { status: 400 },
       );
     }
 
-    const records = await prisma.medicalStock.findMany({
-      where: { organizationId },
-      orderBy: { updatedAt: "desc" },
-    });
-
-    const items = records.map(serializeMedicalStockRecord);
+    const rows = await getMedicalStockRowsByOrganization(organizationId);
+    const items = rows.map(mapMedicalStockRow);
 
     const workbook = XLSX.utils.book_new();
     const worksheet = XLSX.utils.json_to_sheet(buildWorkbookRows(items), {

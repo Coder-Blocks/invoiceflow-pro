@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureMedicalStockTables, getMedicalStockByKey, getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
 import {
   cleanString,
@@ -8,7 +10,6 @@ import {
   normalizeBatchKey,
   normalizeMedicineKey,
   parseExpiryDateInput,
-  serializeMedicalStockRecord,
 } from "@/lib/medical-stock/utils";
 import { saveMedicalStockSchema } from "@/lib/medical-stock/validators";
 import type { SaveMedicalStockResponse } from "@/types/medical-stock";
@@ -38,7 +39,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { organizationId, rows, billId } = parsedBody.data;
+    const { organizationId, rows } = parsedBody.data;
+
+    await ensureMedicalStockTables();
 
     const mergedRows = mergeIncomingRows(
       rows.map((row) => ({
@@ -58,98 +61,110 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const keys = mergedRows.map((row) => ({
-      medicineKey: normalizeMedicineKey(row.medicineName),
-      batchKey: normalizeBatchKey(row.batchNumber),
-    }));
-
-    const existing = await prisma.medicalStock.findMany({
-      where: {
-        organizationId,
-        OR: keys.map((item) => ({
-          medicineKey: item.medicineKey,
-          batchKey: item.batchKey,
-        })),
-      },
-    });
-
-    const existingMap = new Map(
-      existing.map((item) => [
-        `${item.medicineKey}__${item.batchKey}`,
-        item,
-      ]),
-    );
-
-    await prisma.$transaction(
-      mergedRows.map((row) => {
+    await prisma.$transaction(async (tx) => {
+      for (const row of mergedRows) {
         const medicineKey = normalizeMedicineKey(row.medicineName);
         const batchKey = normalizeBatchKey(row.batchNumber);
-        const key = `${medicineKey}__${batchKey}`;
-        const found = existingMap.get(key);
         const incomingExpiry = parseExpiryDateInput(row.expiryDate);
 
         if (!incomingExpiry) {
           throw new Error(`Invalid expiry date for medicine ${row.medicineName}.`);
         }
 
+        const existingRows = await tx.$queryRaw<
+          Array<{
+            id: string;
+            quantity: number;
+            expiryDate: Date | string;
+            purchasePrice: string | number;
+            sellingPrice: string | number;
+            vendorName: string | null;
+            billFileUrl: string | null;
+          }>
+        >`
+          SELECT
+            "id",
+            "quantity",
+            "expiryDate",
+            "purchasePrice",
+            "sellingPrice",
+            "vendorName",
+            "billFileUrl"
+          FROM "MedicalStock"
+          WHERE "organizationId" = ${organizationId}
+            AND "medicineKey" = ${medicineKey}
+            AND "batchKey" = ${batchKey}
+          LIMIT 1
+        `;
+
+        const found = existingRows[0];
+
         if (found) {
-          const chosenExpiry = incomingExpiry > found.expiryDate ? incomingExpiry : found.expiryDate;
+          const existingExpiry =
+            found.expiryDate instanceof Date
+              ? found.expiryDate
+              : new Date(found.expiryDate);
 
-          return prisma.medicalStock.update({
-            where: {
-              id: found.id,
-            },
-            data: {
-              quantity: found.quantity + row.quantity,
-              purchasePrice: row.purchasePrice,
-              sellingPrice: row.sellingPrice,
-              expiryDate: chosenExpiry,
-              vendorName: row.vendorName || found.vendorName,
-              billFileUrl: row.billFileUrl || found.billFileUrl,
-            },
-          });
+          const chosenExpiry = incomingExpiry > existingExpiry ? incomingExpiry : existingExpiry;
+
+          await tx.$executeRaw`
+            UPDATE "MedicalStock"
+            SET
+              "quantity" = ${Number(found.quantity) + Number(row.quantity)},
+              "purchasePrice" = ${row.purchasePrice},
+              "sellingPrice" = ${row.sellingPrice},
+              "expiryDate" = ${formatDateToISO(chosenExpiry)}::date,
+              "vendorName" = ${row.vendorName || found.vendorName || ""},
+              "billFileUrl" = ${row.billFileUrl || found.billFileUrl},
+              "updatedAt" = NOW()
+            WHERE "id" = ${found.id}
+          `;
+        } else {
+          await tx.$executeRaw`
+            INSERT INTO "MedicalStock" (
+              "id",
+              "organizationId",
+              "medicineName",
+              "medicineKey",
+              "batchNumber",
+              "batchKey",
+              "expiryDate",
+              "quantity",
+              "purchasePrice",
+              "sellingPrice",
+              "vendorName",
+              "billFileUrl",
+              "createdAt",
+              "updatedAt"
+            )
+            VALUES (
+              ${randomUUID()},
+              ${organizationId},
+              ${row.medicineName},
+              ${medicineKey},
+              ${row.batchNumber},
+              ${batchKey},
+              ${row.expiryDate}::date,
+              ${row.quantity},
+              ${row.purchasePrice},
+              ${row.sellingPrice},
+              ${row.vendorName || ""},
+              ${row.billFileUrl || null},
+              NOW(),
+              NOW()
+            )
+          `;
         }
-
-        return prisma.medicalStock.create({
-          data: {
-            organizationId,
-            medicineName: row.medicineName,
-            medicineKey,
-            batchNumber: row.batchNumber,
-            batchKey,
-            expiryDate: incomingExpiry,
-            quantity: row.quantity,
-            purchasePrice: row.purchasePrice,
-            sellingPrice: row.sellingPrice,
-            vendorName: row.vendorName,
-            billFileUrl: row.billFileUrl || null,
-          },
-        });
-      }),
-    );
-
-    if (billId) {
-      await prisma.uploadedMedicalBill.updateMany({
-        where: {
-          id: billId,
-          organizationId,
-        },
-        data: {
-          parseMessage: `Saved ${mergedRows.length} medicine row(s) into stock on ${formatDateToISO(new Date())}.`,
-        },
-      });
-    }
-
-    const current = await prisma.medicalStock.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: "desc" },
+      }
     });
+
+    const currentRows = await getMedicalStockRowsByOrganization(organizationId);
 
     const response: SaveMedicalStockResponse = {
       success: true,
       message: "Medical stock saved successfully.",
       savedCount: mergedRows.length,
-      items: current.map(serializeMedicalStockRecord),
+      items: currentRows.map(mapMedicalStockRow),
     };
 
     return NextResponse.json(response, { status: 200 });

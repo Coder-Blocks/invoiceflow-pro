@@ -16,8 +16,8 @@ export type StoredMedicalUpload = {
 };
 
 function getSupabaseAdminClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
   if (!supabaseUrl) {
     throw new Error("NEXT_PUBLIC_SUPABASE_URL is not configured.");
@@ -36,7 +36,8 @@ function getSupabaseAdminClient() {
 }
 
 function getBucketName() {
-  return process.env.SUPABASE_STORAGE_BUCKET?.trim() || "medical-stock";
+  const bucket = process.env.SUPABASE_STORAGE_BUCKET?.trim() || "medical-stock";
+  return bucket.replace(/^["']|["']$/g, "");
 }
 
 export function getFileExtension(fileName: string): string {
@@ -54,6 +55,15 @@ function sanitizeFileName(fileName: string): string {
     .replace(/^-|-$/g, "");
 
   return `${sanitizedBase || "bill"}${extension}`;
+}
+
+function sanitizePathPart(value: string) {
+  return value
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/[^a-zA-Z0-9-_]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 export function validateMedicalUploadFile(file: File) {
@@ -89,8 +99,10 @@ export async function storeMedicalUploadFile(params: {
 
   const extension = getFileExtension(file.name);
   const safeName = sanitizeFileName(file.name);
+  const orgPart = sanitizePathPart(organizationId) || "default-org";
+  const yearPart = String(new Date().getFullYear());
   const storedFileName = `${Date.now()}-${randomUUID()}${extension}`;
-  const storagePath = `${organizationId}/${new Date().getFullYear()}/${storedFileName}-${safeName}`;
+  const storagePath = `${orgPart}/${yearPart}/${storedFileName}-${safeName}`;
 
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
