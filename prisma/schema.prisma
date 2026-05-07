@@ -33,6 +33,13 @@ enum EstimateStatus {
   EXPIRED
 }
 
+enum MedicalBillParseStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  UNSUPPORTED
+}
+
 model AccountLedger {
   id             String      @id @default(cuid())
   organizationId String
@@ -784,4 +791,45 @@ model ITRRecord {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model MedicalStock {
+  id             String   @id @default(cuid())
+  organizationId String
+  medicineName   String
+  medicineKey    String
+  batchNumber    String
+  batchKey       String
+  expiryDate     DateTime
+  quantity       Int
+  purchasePrice  Decimal  @db.Decimal(12, 2)
+  sellingPrice   Decimal  @db.Decimal(12, 2)
+  vendorName     String
+  billFileUrl    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, medicineKey, batchKey])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, expiryDate])
+  @@index([organizationId, quantity])
+  @@index([organizationId, medicineName])
+}
+
+model UploadedMedicalBill {
+  id               String                 @id @default(cuid())
+  organizationId   String
+  originalFileName String
+  storedFileName   String
+  mimeType         String
+  fileSize         Int
+  fileUrl          String
+  parseStatus      MedicalBillParseStatus @default(PENDING)
+  parseMessage     String?
+  extractedRowsJson Json?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, parseStatus])
 }

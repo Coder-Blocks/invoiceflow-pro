@@ -1,157 +1,165 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
+import {
+  cleanString,
+  formatDateToISO,
+  mergeIncomingRows,
+  normalizeBatchKey,
+  normalizeMedicineKey,
+  parseExpiryDateInput,
+  serializeMedicalStockRecord,
+} from "@/lib/medical-stock/utils";
+import { saveMedicalStockSchema } from "@/lib/medical-stock/validators";
+import type { SaveMedicalStockResponse } from "@/types/medical-stock";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-function toNumber(value: unknown): number {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : 0;
-}
-
-function toNullableString(value: unknown): string | null {
-  const str = String(value ?? "").trim();
-  return str ? str : null;
-}
-
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
-    const body = await req.json();
-    const items = Array.isArray(body?.items) ? body.items : [];
-    const organizationId = String(body?.organizationId || "").trim();
+    const json = (await request.json()) as Record<string, unknown>;
+    const organizationIdFromRequest = await resolveOrganizationIdFromRequest(request, {
+      jsonBody: json,
+    });
 
-    if (!organizationId) {
+    const parsedBody = saveMedicalStockSchema.safeParse({
+      ...json,
+      organizationId: organizationIdFromRequest ?? json.organizationId,
+    });
+
+    if (!parsedBody.success) {
       return NextResponse.json(
-        { success: false, error: "organizationId is required" },
-        { status: 400 }
-      );
-    }
-
-    if (items.length === 0) {
-      return NextResponse.json(
-        { success: false, error: "No stock items provided" },
-        { status: 400 }
-      );
-    }
-
-    const validItems = items
-      .map((item: any) => {
-        const medicineName = String(item?.medicineName || "").trim();
-        const batchNumber = String(item?.batchNumber || "").trim();
-        const expiryDateRaw = String(item?.expiryDate || "").trim();
-
-        if (!medicineName || !batchNumber || !expiryDateRaw) {
-          return null;
-        }
-
-        const expiryDate = new Date(expiryDateRaw);
-        if (Number.isNaN(expiryDate.getTime())) {
-          return null;
-        }
-
-        return {
-          organizationId,
-          medicineName,
-          quantity: toNumber(item?.quantity),
-          unitType:
-            String(item?.unitType || item?.pack || "UNIT").trim() || "UNIT",
-          batchNumber,
-          expiryDate,
-          costPrice: toNumber(item?.purchasePrice),
-          sellingPrice:
-            item?.sellingPrice !== undefined &&
-            item?.sellingPrice !== null &&
-            String(item?.sellingPrice).trim() !== ""
-              ? toNumber(item?.sellingPrice)
-              : null,
-          vendorName: toNullableString(item?.vendorName),
-          billFileUrl: toNullableString(item?.billFileUrl),
-          lowStockThreshold: toNumber(item?.lowStockThreshold ?? 10),
-        };
-      })
-      .filter(Boolean) as Array<{
-      organizationId: string;
-      medicineName: string;
-      quantity: number;
-      unitType: string;
-      batchNumber: string;
-      expiryDate: Date;
-      costPrice: number;
-      sellingPrice: number | null;
-      vendorName: string | null;
-      billFileUrl: string | null;
-      lowStockThreshold: number;
-    }>;
-
-    if (validItems.length === 0) {
-      return NextResponse.json(
-        { success: false, error: "No valid stock rows found to save" },
-        { status: 400 }
-      );
-    }
-
-    let savedCount = 0;
-
-    for (const item of validItems) {
-      const existing = await prisma.medicineStock.findFirst({
-        where: {
-          organizationId: item.organizationId,
-          medicineName: item.medicineName,
-          batchNumber: item.batchNumber,
-          expiryDate: item.expiryDate,
+        {
+          success: false,
+          message: parsedBody.error.issues[0]?.message ?? "Invalid request body.",
         },
-        orderBy: {
-          createdAt: "desc",
+        { status: 400 },
+      );
+    }
+
+    const { organizationId, rows, billId } = parsedBody.data;
+
+    const mergedRows = mergeIncomingRows(
+      rows.map((row) => ({
+        ...row,
+        medicineName: cleanString(row.medicineName),
+        batchNumber: cleanString(row.batchNumber),
+        expiryDate: cleanString(row.expiryDate),
+        vendorName: cleanString(row.vendorName),
+        billFileUrl: row.billFileUrl ?? null,
+      })),
+    );
+
+    if (mergedRows.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "No valid medicine rows to save." },
+        { status: 400 },
+      );
+    }
+
+    const keys = mergedRows.map((row) => ({
+      medicineKey: normalizeMedicineKey(row.medicineName),
+      batchKey: normalizeBatchKey(row.batchNumber),
+    }));
+
+    const existing = await prisma.medicalStock.findMany({
+      where: {
+        organizationId,
+        OR: keys.map((item) => ({
+          medicineKey: item.medicineKey,
+          batchKey: item.batchKey,
+        })),
+      },
+    });
+
+    const existingMap = new Map(
+      existing.map((item) => [
+        `${item.medicineKey}__${item.batchKey}`,
+        item,
+      ]),
+    );
+
+    await prisma.$transaction(
+      mergedRows.map((row) => {
+        const medicineKey = normalizeMedicineKey(row.medicineName);
+        const batchKey = normalizeBatchKey(row.batchNumber);
+        const key = `${medicineKey}__${batchKey}`;
+        const found = existingMap.get(key);
+        const incomingExpiry = parseExpiryDateInput(row.expiryDate);
+
+        if (!incomingExpiry) {
+          throw new Error(`Invalid expiry date for medicine ${row.medicineName}.`);
+        }
+
+        if (found) {
+          const chosenExpiry = incomingExpiry > found.expiryDate ? incomingExpiry : found.expiryDate;
+
+          return prisma.medicalStock.update({
+            where: {
+              id: found.id,
+            },
+            data: {
+              quantity: found.quantity + row.quantity,
+              purchasePrice: row.purchasePrice,
+              sellingPrice: row.sellingPrice,
+              expiryDate: chosenExpiry,
+              vendorName: row.vendorName || found.vendorName,
+              billFileUrl: row.billFileUrl || found.billFileUrl,
+            },
+          });
+        }
+
+        return prisma.medicalStock.create({
+          data: {
+            organizationId,
+            medicineName: row.medicineName,
+            medicineKey,
+            batchNumber: row.batchNumber,
+            batchKey,
+            expiryDate: incomingExpiry,
+            quantity: row.quantity,
+            purchasePrice: row.purchasePrice,
+            sellingPrice: row.sellingPrice,
+            vendorName: row.vendorName,
+            billFileUrl: row.billFileUrl || null,
+          },
+        });
+      }),
+    );
+
+    if (billId) {
+      await prisma.uploadedMedicalBill.updateMany({
+        where: {
+          id: billId,
+          organizationId,
+        },
+        data: {
+          parseMessage: `Saved ${mergedRows.length} medicine row(s) into stock on ${formatDateToISO(new Date())}.`,
         },
       });
-
-      if (existing) {
-        await prisma.medicineStock.update({
-          where: { id: existing.id },
-          data: {
-            quantity: item.quantity,
-            unitType: item.unitType,
-            costPrice: item.costPrice,
-            sellingPrice: item.sellingPrice,
-            vendorName: item.vendorName,
-            billFileUrl: item.billFileUrl,
-            lowStockThreshold: item.lowStockThreshold,
-          },
-        });
-      } else {
-        await prisma.medicineStock.create({
-          data: {
-            organizationId: item.organizationId,
-            medicineName: item.medicineName,
-            quantity: item.quantity,
-            unitType: item.unitType,
-            batchNumber: item.batchNumber,
-            expiryDate: item.expiryDate,
-            costPrice: item.costPrice,
-            sellingPrice: item.sellingPrice,
-            vendorName: item.vendorName,
-            billFileUrl: item.billFileUrl,
-            lowStockThreshold: item.lowStockThreshold,
-          },
-        });
-      }
-
-      savedCount++;
     }
 
-    return NextResponse.json({
-      success: true,
-      message: "Medical stock saved successfully",
-      count: savedCount,
+    const current = await prisma.medicalStock.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: "desc" },
     });
-  } catch (error: any) {
-    console.error("Medical stock save error:", error);
+
+    const response: SaveMedicalStockResponse = {
+      success: true,
+      message: "Medical stock saved successfully.",
+      savedCount: mergedRows.length,
+      items: current.map(serializeMedicalStockRecord),
+    };
+
+    return NextResponse.json(response, { status: 200 });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to save medical stock.";
 
     return NextResponse.json(
-      {
-        success: false,
-        error: error?.message || "Failed to save medical stock data",
-      },
-      { status: 500 }
+      { success: false, message },
+      { status: 500 },
     );
   }
 }

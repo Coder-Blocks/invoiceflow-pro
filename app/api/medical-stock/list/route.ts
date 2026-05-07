@@ -1,63 +1,74 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
+import { serializeMedicalStockRecord } from "@/lib/medical-stock/utils";
+import type { ListMedicalStockResponse } from "@/types/medical-stock";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const organizationId = String(searchParams.get("organizationId") || "").trim();
+    const organizationId = await resolveOrganizationIdFromRequest(request);
 
     if (!organizationId) {
       return NextResponse.json(
-        { success: false, error: "organizationId is required" },
-        { status: 400 }
+        { success: false, message: "Organization ID is required." },
+        { status: 400 },
       );
     }
 
-    const items = await prisma.medicineStock.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        medicineName: true,
-        batchNumber: true,
-        expiryDate: true,
-        quantity: true,
-        costPrice: true,
-        sellingPrice: true,
-        vendorName: true,
-        billFileUrl: true,
-        createdAt: true,
+    const search = request.nextUrl.searchParams.get("search")?.trim().toLowerCase() ?? "";
+    const lowStockOnly = request.nextUrl.searchParams.get("lowStockOnly") === "true";
+    const expiryOnly = request.nextUrl.searchParams.get("expiryOnly") === "true";
+
+    const records = await prisma.medicalStock.findMany({
+      where: {
+        organizationId,
       },
+      orderBy: [
+        { updatedAt: "desc" },
+        { createdAt: "desc" },
+      ],
     });
 
-    return NextResponse.json({
+    let items = records.map(serializeMedicalStockRecord);
+
+    if (search) {
+      items = items.filter((item) => {
+        const haystack = [
+          item.medicineName,
+          item.batchNumber,
+          item.vendorName,
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        return haystack.includes(search);
+      });
+    }
+
+    if (lowStockOnly) {
+      items = items.filter((item) => item.isLowStock);
+    }
+
+    if (expiryOnly) {
+      items = items.filter((item) => item.isExpired || item.expiresIn30Days);
+    }
+
+    const response: ListMedicalStockResponse = {
       success: true,
-      items: items.map((item) => ({
-        id: item.id,
-        medicineName: item.medicineName,
-        batchNumber: item.batchNumber,
-        expiryDate: item.expiryDate
-          ? new Date(item.expiryDate).toISOString().split("T")[0]
-          : "",
-        quantity: Number(item.quantity ?? 0),
-        purchasePrice: Number(item.costPrice ?? 0),
-        sellingPrice: Number(item.sellingPrice ?? 0),
-        vendorName: item.vendorName || "",
-        billFileUrl: item.billFileUrl || "",
-        createdAt: item.createdAt,
-      })),
-    });
-  } catch (error: any) {
-    console.error("Medical stock list error:", error);
+      items,
+    };
+
+    return NextResponse.json(response, { status: 200 });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to fetch medical stock list.";
 
     return NextResponse.json(
-      {
-        success: false,
-        error: error?.message || "Failed to fetch medical stock list",
-      },
-      { status: 500 }
+      { success: false, message },
+      { status: 500 },
     );
   }
 }
