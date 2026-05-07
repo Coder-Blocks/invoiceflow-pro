@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { ensureMedicalStockTables, getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
+import {
+  ensureMedicalStockTables,
+  getMedicalStockRowsByOrganization,
+  mapMedicalStockRow,
+} from "@/lib/medical-stock/db";
 import {
   cleanString,
   formatDateToISO,
@@ -35,98 +39,96 @@ export async function persistMedicalStockRows(
     };
   }
 
-  await prisma.$transaction(async (tx) => {
-    for (const row of mergedRows) {
-      const medicineKey = normalizeMedicineKey(row.medicineName);
-      const batchKey = normalizeBatchKey(row.batchNumber);
-      const incomingExpiry = parseExpiryDateInput(row.expiryDate);
+  for (const row of mergedRows) {
+    const medicineKey = normalizeMedicineKey(row.medicineName);
+    const batchKey = normalizeBatchKey(row.batchNumber);
+    const incomingExpiry = parseExpiryDateInput(row.expiryDate);
 
-      if (!incomingExpiry) {
-        continue;
-      }
-
-      const existingRows = await tx.$queryRaw<
-        Array<{
-          id: string;
-          quantity: number;
-          expiryDate: Date | string;
-          vendorName: string | null;
-          billFileUrl: string | null;
-        }>
-      >`
-        SELECT
-          "id",
-          "quantity",
-          "expiryDate",
-          "vendorName",
-          "billFileUrl"
-        FROM "MedicalStock"
-        WHERE "organizationId" = ${organizationId}
-          AND "medicineKey" = ${medicineKey}
-          AND "batchKey" = ${batchKey}
-        LIMIT 1
-      `;
-
-      const found = existingRows[0];
-
-      if (found) {
-        const existingExpiry =
-          found.expiryDate instanceof Date
-            ? found.expiryDate
-            : new Date(found.expiryDate);
-
-        const chosenExpiry = incomingExpiry > existingExpiry ? incomingExpiry : existingExpiry;
-
-        await tx.$executeRaw`
-          UPDATE "MedicalStock"
-          SET
-            "quantity" = ${Number(found.quantity) + Number(row.quantity)},
-            "purchasePrice" = ${row.purchasePrice},
-            "sellingPrice" = ${row.sellingPrice},
-            "expiryDate" = ${formatDateToISO(chosenExpiry)}::date,
-            "vendorName" = ${row.vendorName || found.vendorName || ""},
-            "billFileUrl" = ${row.billFileUrl || found.billFileUrl},
-            "updatedAt" = NOW()
-          WHERE "id" = ${found.id}
-        `;
-      } else {
-        await tx.$executeRaw`
-          INSERT INTO "MedicalStock" (
-            "id",
-            "organizationId",
-            "medicineName",
-            "medicineKey",
-            "batchNumber",
-            "batchKey",
-            "expiryDate",
-            "quantity",
-            "purchasePrice",
-            "sellingPrice",
-            "vendorName",
-            "billFileUrl",
-            "createdAt",
-            "updatedAt"
-          )
-          VALUES (
-            ${randomUUID()},
-            ${organizationId},
-            ${row.medicineName},
-            ${medicineKey},
-            ${row.batchNumber},
-            ${batchKey},
-            ${row.expiryDate}::date,
-            ${row.quantity},
-            ${row.purchasePrice},
-            ${row.sellingPrice},
-            ${row.vendorName || ""},
-            ${row.billFileUrl || null},
-            NOW(),
-            NOW()
-          )
-        `;
-      }
+    if (!incomingExpiry) {
+      continue;
     }
-  });
+
+    const existingRows = await prisma.$queryRaw<
+      Array<{
+        id: string;
+        quantity: number;
+        expiryDate: Date | string;
+        vendorName: string | null;
+        billFileUrl: string | null;
+      }>
+    >`
+      SELECT
+        "id",
+        "quantity",
+        "expiryDate",
+        "vendorName",
+        "billFileUrl"
+      FROM "MedicalStock"
+      WHERE "organizationId" = ${organizationId}
+        AND "medicineKey" = ${medicineKey}
+        AND "batchKey" = ${batchKey}
+      LIMIT 1
+    `;
+
+    const found = existingRows[0];
+
+    if (found) {
+      const existingExpiry =
+        found.expiryDate instanceof Date
+          ? found.expiryDate
+          : new Date(found.expiryDate);
+
+      const chosenExpiry = incomingExpiry > existingExpiry ? incomingExpiry : existingExpiry;
+
+      await prisma.$executeRaw`
+        UPDATE "MedicalStock"
+        SET
+          "quantity" = ${Number(found.quantity) + Number(row.quantity)},
+          "purchasePrice" = ${row.purchasePrice},
+          "sellingPrice" = ${row.sellingPrice},
+          "expiryDate" = ${formatDateToISO(chosenExpiry)}::date,
+          "vendorName" = ${row.vendorName || found.vendorName || ""},
+          "billFileUrl" = ${row.billFileUrl || found.billFileUrl},
+          "updatedAt" = NOW()
+        WHERE "id" = ${found.id}
+      `;
+    } else {
+      await prisma.$executeRaw`
+        INSERT INTO "MedicalStock" (
+          "id",
+          "organizationId",
+          "medicineName",
+          "medicineKey",
+          "batchNumber",
+          "batchKey",
+          "expiryDate",
+          "quantity",
+          "purchasePrice",
+          "sellingPrice",
+          "vendorName",
+          "billFileUrl",
+          "createdAt",
+          "updatedAt"
+        )
+        VALUES (
+          ${randomUUID()},
+          ${organizationId},
+          ${row.medicineName},
+          ${medicineKey},
+          ${row.batchNumber},
+          ${batchKey},
+          ${row.expiryDate}::date,
+          ${row.quantity},
+          ${row.purchasePrice},
+          ${row.sellingPrice},
+          ${row.vendorName || ""},
+          ${row.billFileUrl || null},
+          NOW(),
+          NOW()
+        )
+      `;
+    }
+  }
 
   const currentRows = await getMedicalStockRowsByOrganization(organizationId);
 

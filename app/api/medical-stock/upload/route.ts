@@ -62,6 +62,11 @@ export async function POST(request: NextRequest) {
 
     const billId = randomUUID();
 
+    const finalMessage =
+      rowsWithBillUrl.length > 0
+        ? `${parsed.parseMessage} Stock updated automatically for ${autoSavedCount} row(s).`
+        : parsed.parseMessage;
+
     const bill = await insertUploadedMedicalBill({
       id: billId,
       organizationId,
@@ -71,19 +76,13 @@ export async function POST(request: NextRequest) {
       fileSize: stored.size,
       fileUrl: stored.publicFileUrl,
       parseStatus: parsed.parseStatus,
-      parseMessage:
-        rowsWithBillUrl.length > 0
-          ? `${parsed.parseMessage} Stock updated automatically for ${autoSavedCount} row(s).`
-          : parsed.parseMessage,
+      parseMessage: finalMessage,
       extractedRows: rowsWithBillUrl,
     });
 
     const response: UploadMedicalBillResponse = {
       success: true,
-      message:
-        rowsWithBillUrl.length > 0
-          ? `${parsed.parseMessage} Stock updated automatically for ${autoSavedCount} row(s).`
-          : parsed.parseMessage,
+      message: finalMessage,
       bill: {
         id: bill.id,
         organizationId: bill.organizationId,
