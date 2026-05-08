@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import SavedStockGroupedTable from "@/components/medical-stock/SavedStockGroupedTable";
 import type {
   MedicalStockItem,
   MedicalStockRowInput,
@@ -620,136 +621,59 @@ if (data.extractedRows.length > 0) {
       </div>
 
       <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Saved Stock List</h2>
-            <p className="text-sm text-slate-600">
-              Auto-updates quantity for same medicine name and batch number.
-            </p>
-          </div>
+  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div>
+      <h2 className="text-lg font-semibold text-slate-900">Saved Stock List</h2>
+      <p className="text-sm text-slate-600">
+        Same medicine is grouped. Different batch numbers are preserved. Price changes are shown in batch history.
+      </p>
+    </div>
 
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                const response = await fetch("/api/medical-stock/export", {
-                  method: "GET",
-                });
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          const response = await fetch("/api/medical-stock/export", {
+            method: "GET",
+          });
 
-                if (!response.ok) {
-                  const data = await readJsonSafely<{ message?: string }>(response);
-                  throw new Error(data?.message || "Failed to export stock.");
-                }
+          if (!response.ok) {
+            const data = await readJsonSafely<{ message?: string }>(response);
+            throw new Error(data?.message || "Failed to export stock.");
+          }
 
-                const blob = await response.blob();
-                const objectUrl = window.URL.createObjectURL(blob);
-                const anchor = document.createElement("a");
-                anchor.href = objectUrl;
-                anchor.download = "medical-stock-export.xlsx";
-                document.body.appendChild(anchor);
-                anchor.click();
-                anchor.remove();
-                window.URL.revokeObjectURL(objectUrl);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : "Export failed.");
-              }
-            }}
-            className="rounded-2xl border border-blue-300 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
-          >
-            Export All Stock Excel
-          </button>
-        </div>
+          const blob = await response.blob();
+          const objectUrl = window.URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = objectUrl;
+          anchor.download = "medical-stock-export.xlsx";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          window.URL.revokeObjectURL(objectUrl);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Export failed.");
+        }
+      }}
+      className="rounded-2xl border border-blue-300 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
+    >
+      Export All Stock Excel
+    </button>
+  </div>
 
-        <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200">
-          <table className="min-w-[1200px] w-full border-collapse text-sm">
-            <thead className="bg-slate-50">
-              <tr className="text-left text-slate-700">
-                <th className="px-3 py-3 font-semibold">Medicine Name</th>
-                <th className="px-3 py-3 font-semibold">Batch Number</th>
-                <th className="px-3 py-3 font-semibold">Expiry Date</th>
-                <th className="px-3 py-3 font-semibold">Quantity</th>
-                <th className="px-3 py-3 font-semibold">Purchase Price</th>
-                <th className="px-3 py-3 font-semibold">Selling Price</th>
-                <th className="px-3 py-3 font-semibold">Vendor Name</th>
-                <th className="px-3 py-3 font-semibold">Bill</th>
-                <th className="px-3 py-3 font-semibold">Created Date</th>
-                <th className="px-3 py-3 font-semibold">Warnings</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stockItems.length === 0 ? (
-                <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
-                    {loadingList ? "Loading stock..." : "No medical stock found."}
-                  </td>
-                </tr>
-              ) : (
-                stockItems.map((item) => (
-                  <tr key={item.id} className="border-t border-slate-200">
-                    <td className="px-3 py-3 font-medium text-slate-900">{item.medicineName}</td>
-                    <td className="px-3 py-3 text-slate-700">{item.batchNumber}</td>
-                    <td className="px-3 py-3 text-slate-700">{formatDateDisplay(item.expiryDate)}</td>
-                    <td className="px-3 py-3 text-slate-700">{item.quantity}</td>
-                    <td className="px-3 py-3 text-slate-700">{formatCurrency(item.purchasePrice)}</td>
-                    <td className="px-3 py-3 text-slate-700">{formatCurrency(item.sellingPrice)}</td>
-                    <td className="px-3 py-3 text-slate-700">{item.vendorName || "-"}</td>
-                    <td className="px-3 py-3">
-                      {item.billFileUrl ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPreviewBill({
-                              url: item.billFileUrl || "",
-                              mimeType:
-                                getFileType(item.billFileUrl) === "pdf"
-                                  ? "application/pdf"
-                                  : "image/*",
-                              title: item.medicineName,
-                            })
-                          }
-                          className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-                        >
-                          View Bill
-                        </button>
-                      ) : (
-                        <span className="text-slate-400">No bill</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-slate-700">{formatDateDisplay(item.createdAt)}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex flex-wrap gap-2">
-                        {item.isLowStock && (
-                          <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
-                            Low Stock
-                          </span>
-                        )}
-
-                        {item.isExpired && (
-                          <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
-                            Expired
-                          </span>
-                        )}
-
-                        {!item.isExpired && item.expiresIn30Days && (
-                          <span className="rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700">
-                            Expires in {item.daysToExpiry} day(s)
-                          </span>
-                        )}
-
-                        {!item.isLowStock && !item.isExpired && !item.expiresIn30Days && (
-                          <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                            Healthy
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+  <div className="mt-4">
+    <SavedStockGroupedTable
+      items={stockItems}
+      onPreviewBill={(url, title) =>
+        setPreviewBill({
+          url,
+          mimeType: url.toLowerCase().includes(".pdf") ? "application/pdf" : "image/*",
+          title: title || "Bill Preview",
+        })
+      }
+    />
+  </div>
+</section>
 
       <div className="sticky bottom-4 z-20 rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-end">

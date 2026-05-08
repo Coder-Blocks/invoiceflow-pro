@@ -24,10 +24,19 @@ export type UploadedMedicalBillItem = {
   updatedAt: string;
 };
 
-export type MedicalStockItem = {
+export type MedicalStockPriceHistoryItem = {
   id: string;
-  organizationId: string;
-  medicineName: string;
+  quantity: number;
+  purchasePrice: number;
+  sellingPrice: number;
+  expiryDate: string;
+  vendorName: string;
+  billFileUrl: string | null;
+  createdAt: string;
+};
+
+export type MedicalStockBatchItem = {
+  id: string;
   batchNumber: string;
   expiryDate: string;
   quantity: number;
@@ -37,10 +46,26 @@ export type MedicalStockItem = {
   billFileUrl: string | null;
   createdAt: string;
   updatedAt: string;
+  isExpired: boolean;
+  expiresIn30Days: boolean;
+  daysToExpiry: number;
+  priceHistory: MedicalStockPriceHistoryItem[];
+};
+
+export type MedicalStockGroupedItem = {
+  id: string;
+  medicineName: string;
+  totalQuantity: number;
+  batchCount: number;
+  latestPurchasePrice: number;
+  latestSellingPrice: number;
+  earliestExpiryDate: string;
+  vendorNames: string[];
   isLowStock: boolean;
   isExpired: boolean;
   expiresIn30Days: boolean;
   daysToExpiry: number;
+  batches: MedicalStockBatchItem[];
 };
 
 export type UploadMedicalBillResponse = {
@@ -55,10 +80,10 @@ export type SaveMedicalStockResponse = {
   success: boolean;
   message: string;
   savedCount: number;
-  items: MedicalStockItem[];
+  items: MedicalStockGroupedItem[];
 };
 
 export type ListMedicalStockResponse = {
   success: boolean;
-  items: MedicalStockItem[];
+  items: MedicalStockGroupedItem[];
 };

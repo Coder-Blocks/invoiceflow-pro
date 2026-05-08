@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildGroupedMedicalStock, getMedicalStockMovementsByOrganization, getMedicalStockRowsByOrganization } from "@/lib/medical-stock/db";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
-import {
-  getMedicalStockRowsByOrganization,
-  mapMedicalStockRow,
-} from "@/lib/medical-stock/db";
 import type { ListMedicalStockResponse } from "@/types/medical-stock";
 
 export const runtime = "nodejs";
@@ -24,12 +21,23 @@ export async function GET(request: NextRequest) {
     const lowStockOnly = request.nextUrl.searchParams.get("lowStockOnly") === "true";
     const expiryOnly = request.nextUrl.searchParams.get("expiryOnly") === "true";
 
-    const rows = await getMedicalStockRowsByOrganization(organizationId);
-    let items = rows.map(mapMedicalStockRow);
+    const [stockRows, movementRows] = await Promise.all([
+      getMedicalStockRowsByOrganization(organizationId),
+      getMedicalStockMovementsByOrganization(organizationId),
+    ]);
+
+    let items = buildGroupedMedicalStock({
+      stockRows,
+      movementRows,
+    });
 
     if (search) {
       items = items.filter((item) =>
-        [item.medicineName, item.batchNumber, item.vendorName]
+        [
+          item.medicineName,
+          ...item.vendorNames,
+          ...item.batches.map((b) => b.batchNumber),
+        ]
           .join(" ")
           .toLowerCase()
           .includes(search),

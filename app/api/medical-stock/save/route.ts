@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
-import { saveMedicalStockSchema } from "@/lib/medical-stock/validators";
 import { persistMedicalStockRows } from "@/lib/medical-stock/persist";
+import { saveMedicalStockSchema } from "@/lib/medical-stock/validators";
 import type { SaveMedicalStockResponse } from "@/types/medical-stock";
 
 export const runtime = "nodejs";
@@ -55,8 +55,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { organizationId, rows } = parsedBody.data;
-    const persisted = await persistMedicalStockRows(organizationId, rows);
+    const { organizationId, rows, billId } = parsedBody.data;
+    const persisted = await persistMedicalStockRows(organizationId, rows, billId);
 
     const response: SaveMedicalStockResponse = {
       success: true,

@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
+import { buildGroupedMedicalStock, getMedicalStockMovementsByOrganization, getMedicalStockRowsByOrganization } from "@/lib/medical-stock/db";
 import { MEDICAL_STOCK_EXPORT_HEADERS } from "@/lib/medical-stock/constants";
-import { getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
 import { resolveOrganizationIdFromRequest } from "@/lib/medical-stock/organization";
 import { exportMedicalStockSchema } from "@/lib/medical-stock/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type WorkbookRowInput = {
+function buildCurrentRowsSheet(rows: Array<{
   medicineName: string;
   batchNumber: string;
   expiryDate: string;
@@ -17,9 +17,7 @@ type WorkbookRowInput = {
   sellingPrice: number;
   vendorName: string;
   billFileUrl?: string | null;
-};
-
-function buildWorkbookRows(rows: WorkbookRowInput[]) {
+}>) {
   return rows.map((row) => ({
     "Medicine Name": row.medicineName,
     "Batch Number": row.batchNumber,
@@ -71,33 +69,9 @@ export async function POST(request: NextRequest) {
     const { rows, filename } = parsed.data;
 
     const workbook = XLSX.utils.book_new();
-    const sheetRows = buildWorkbookRows(
-      rows.map((row) => ({
-        medicineName: row.medicineName,
-        batchNumber: row.batchNumber,
-        expiryDate: row.expiryDate,
-        quantity: row.quantity,
-        purchasePrice: row.purchasePrice,
-        sellingPrice: row.sellingPrice,
-        vendorName: row.vendorName,
-        billFileUrl: row.billFileUrl ?? null,
-      })),
-    );
-
-    const worksheet = XLSX.utils.json_to_sheet(sheetRows, {
+    const worksheet = XLSX.utils.json_to_sheet(buildCurrentRowsSheet(rows), {
       header: MEDICAL_STOCK_EXPORT_HEADERS,
     });
-
-    worksheet["!cols"] = [
-      { wch: 28 },
-      { wch: 18 },
-      { wch: 16 },
-      { wch: 12 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 24 },
-      { wch: 40 },
-    ];
 
     XLSX.utils.book_append_sheet(workbook, worksheet, "Medical Stock");
 
@@ -138,26 +112,77 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const rows = await getMedicalStockRowsByOrganization(organizationId);
-    const items = rows.map(mapMedicalStockRow);
+    const [stockRows, movementRows] = await Promise.all([
+      getMedicalStockRowsByOrganization(organizationId),
+      getMedicalStockMovementsByOrganization(organizationId),
+    ]);
 
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.json_to_sheet(buildWorkbookRows(items), {
-      header: MEDICAL_STOCK_EXPORT_HEADERS,
+    const grouped = buildGroupedMedicalStock({
+      stockRows,
+      movementRows,
     });
 
-    worksheet["!cols"] = [
-      { wch: 28 },
-      { wch: 18 },
-      { wch: 16 },
-      { wch: 12 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 24 },
-      { wch: 40 },
-    ];
+    const summarySheet = grouped.map((item) => ({
+      "Medicine Name": item.medicineName,
+      "Total Quantity": item.totalQuantity,
+      "Batch Count": item.batchCount,
+      "Latest Purchase Price": item.latestPurchasePrice,
+      "Latest Selling Price": item.latestSellingPrice,
+      "Earliest Expiry Date": item.earliestExpiryDate,
+      Vendors: item.vendorNames.join(", "),
+    }));
 
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Medical Stock");
+    const batchSheet = grouped.flatMap((item) =>
+      item.batches.map((batch) => ({
+        "Medicine Name": item.medicineName,
+        "Batch Number": batch.batchNumber,
+        "Expiry Date": batch.expiryDate,
+        Quantity: batch.quantity,
+        "Purchase Price": batch.purchasePrice,
+        "Selling Price": batch.sellingPrice,
+        "Vendor Name": batch.vendorName,
+        "Bill File URL": batch.billFileUrl ?? "",
+        "Created Date": batch.createdAt,
+      })),
+    );
+
+    const movementSheet = movementRows.map((row) => ({
+      "Medicine Name": row.medicineName,
+      "Batch Number": row.batchNumber,
+      "Expiry Date":
+        row.expiryDate instanceof Date
+          ? row.expiryDate.toISOString().slice(0, 10)
+          : new Date(row.expiryDate).toISOString().slice(0, 10),
+      Quantity: Number(row.quantity || 0),
+      "Purchase Price": Number(row.purchasePrice || 0),
+      "Selling Price": Number(row.sellingPrice || 0),
+      "Vendor Name": row.vendorName || "",
+      "Bill File URL": row.billFileUrl ?? "",
+      "Created Date":
+        row.createdAt instanceof Date
+          ? row.createdAt.toISOString()
+          : new Date(row.createdAt).toISOString(),
+    }));
+
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(summarySheet),
+      "Stock Summary",
+    );
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(batchSheet),
+      "Batch Details",
+    );
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(movementSheet),
+      "Bill History",
+    );
 
     const buffer = XLSX.write(workbook, {
       type: "buffer",

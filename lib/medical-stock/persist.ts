@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import {
+  buildGroupedMedicalStock,
   ensureMedicalStockTables,
+  getMedicalStockMovementsByOrganization,
   getMedicalStockRowsByOrganization,
-  mapMedicalStockRow,
 } from "@/lib/medical-stock/db";
 import {
   cleanString,
@@ -18,6 +19,7 @@ import type { MedicalStockRowInput } from "@/types/medical-stock";
 export async function persistMedicalStockRows(
   organizationId: string,
   rows: MedicalStockRowInput[],
+  sourceBillId?: string,
 ) {
   await ensureMedicalStockTables();
 
@@ -48,92 +50,94 @@ export async function persistMedicalStockRows(
       continue;
     }
 
-    const existingRows = await prisma.$queryRaw<
-      Array<{
-        id: string;
-        quantity: number;
-        expiryDate: Date | string;
-        vendorName: string | null;
-        billFileUrl: string | null;
-      }>
-    >`
-      SELECT
+    await prisma.$executeRaw`
+      INSERT INTO "MedicalStockMovement" (
         "id",
-        "quantity",
+        "organizationId",
+        "medicineName",
+        "medicineKey",
+        "batchNumber",
+        "batchKey",
         "expiryDate",
+        "quantity",
+        "purchasePrice",
+        "sellingPrice",
         "vendorName",
-        "billFileUrl"
-      FROM "MedicalStock"
-      WHERE "organizationId" = ${organizationId}
-        AND "medicineKey" = ${medicineKey}
-        AND "batchKey" = ${batchKey}
-      LIMIT 1
+        "billFileUrl",
+        "sourceBillId",
+        "createdAt"
+      )
+      VALUES (
+        ${randomUUID()},
+        ${organizationId},
+        ${row.medicineName},
+        ${medicineKey},
+        ${row.batchNumber},
+        ${batchKey},
+        ${formatDateToISO(incomingExpiry)}::date,
+        ${row.quantity},
+        ${row.purchasePrice},
+        ${row.sellingPrice},
+        ${row.vendorName || ""},
+        ${row.billFileUrl || null},
+        ${sourceBillId || null},
+        NOW()
+      )
     `;
 
-    const found = existingRows[0];
-
-    if (found) {
-      const existingExpiry =
-        found.expiryDate instanceof Date
-          ? found.expiryDate
-          : new Date(found.expiryDate);
-
-      const chosenExpiry = incomingExpiry > existingExpiry ? incomingExpiry : existingExpiry;
-
-      await prisma.$executeRaw`
-        UPDATE "MedicalStock"
-        SET
-          "quantity" = ${Number(found.quantity) + Number(row.quantity)},
-          "purchasePrice" = ${row.purchasePrice},
-          "sellingPrice" = ${row.sellingPrice},
-          "expiryDate" = ${formatDateToISO(chosenExpiry)}::date,
-          "vendorName" = ${row.vendorName || found.vendorName || ""},
-          "billFileUrl" = ${row.billFileUrl || found.billFileUrl},
-          "updatedAt" = NOW()
-        WHERE "id" = ${found.id}
-      `;
-    } else {
-      await prisma.$executeRaw`
-        INSERT INTO "MedicalStock" (
-          "id",
-          "organizationId",
-          "medicineName",
-          "medicineKey",
-          "batchNumber",
-          "batchKey",
-          "expiryDate",
-          "quantity",
-          "purchasePrice",
-          "sellingPrice",
-          "vendorName",
-          "billFileUrl",
-          "createdAt",
-          "updatedAt"
-        )
-        VALUES (
-          ${randomUUID()},
-          ${organizationId},
-          ${row.medicineName},
-          ${medicineKey},
-          ${row.batchNumber},
-          ${batchKey},
-          ${row.expiryDate}::date,
-          ${row.quantity},
-          ${row.purchasePrice},
-          ${row.sellingPrice},
-          ${row.vendorName || ""},
-          ${row.billFileUrl || null},
-          NOW(),
-          NOW()
-        )
-      `;
-    }
+    await prisma.$executeRaw`
+      INSERT INTO "MedicalStock" (
+        "id",
+        "organizationId",
+        "medicineName",
+        "medicineKey",
+        "batchNumber",
+        "batchKey",
+        "expiryDate",
+        "quantity",
+        "purchasePrice",
+        "sellingPrice",
+        "vendorName",
+        "billFileUrl",
+        "createdAt",
+        "updatedAt"
+      )
+      VALUES (
+        ${randomUUID()},
+        ${organizationId},
+        ${row.medicineName},
+        ${medicineKey},
+        ${row.batchNumber},
+        ${batchKey},
+        ${formatDateToISO(incomingExpiry)}::date,
+        ${row.quantity},
+        ${row.purchasePrice},
+        ${row.sellingPrice},
+        ${row.vendorName || ""},
+        ${row.billFileUrl || null},
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT ("organizationId", "medicineKey", "batchKey")
+      DO UPDATE SET
+        "quantity" = "MedicalStock"."quantity" + EXCLUDED."quantity",
+        "purchasePrice" = EXCLUDED."purchasePrice",
+        "sellingPrice" = EXCLUDED."sellingPrice",
+        "expiryDate" = GREATEST("MedicalStock"."expiryDate", EXCLUDED."expiryDate"),
+        "vendorName" = EXCLUDED."vendorName",
+        "billFileUrl" = COALESCE(EXCLUDED."billFileUrl", "MedicalStock"."billFileUrl"),
+        "updatedAt" = NOW()
+    `;
   }
 
-  const currentRows = await getMedicalStockRowsByOrganization(organizationId);
+  const stockRows = await getMedicalStockRowsByOrganization(organizationId);
+  const movementRows = await getMedicalStockMovementsByOrganization(organizationId);
 
   return {
     savedCount: mergedRows.length,
-    items: currentRows.map(mapMedicalStockRow),
+    items: buildGroupedMedicalStock({
+      stockRows,
+      movementRows,
+    }),
   };
 }

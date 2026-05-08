@@ -53,14 +53,14 @@ export async function POST(request: NextRequest) {
       billFileUrl: stored.publicFileUrl,
     }));
 
+    const billId = randomUUID();
+
     let autoSavedCount = 0;
 
     if (rowsWithBillUrl.length > 0) {
-      const persisted = await persistMedicalStockRows(organizationId, rowsWithBillUrl);
+      const persisted = await persistMedicalStockRows(organizationId, rowsWithBillUrl, billId);
       autoSavedCount = persisted.savedCount;
     }
-
-    const billId = randomUUID();
 
     const finalMessage =
       rowsWithBillUrl.length > 0
