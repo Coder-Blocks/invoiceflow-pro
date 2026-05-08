@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireActiveOrganization } from "@/lib/active-organization";
-import { getMedicalStockRowsByOrganization, mapMedicalStockRow } from "@/lib/medical-stock/db";
+import { buildGroupedMedicalStock, getMedicalStockMovementsByOrganization, getMedicalStockRowsByOrganization } from "@/lib/medical-stock/db";
 
 export const runtime = "nodejs";
 
@@ -34,7 +34,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const [invoices, payments, expenses, sales, legacyStocks, salarySlips, medicalRows] =
+    const [invoices, payments, expenses, sales, legacyStocks, salarySlips, stockRows, movementRows] =
       await Promise.all([
         prisma.invoice.findMany({ where: { organizationId } }),
         prisma.payment.findMany({ where: { organizationId } }),
@@ -43,20 +43,25 @@ export async function POST(req: Request) {
         prisma.medicineStock.findMany({ where: { organizationId } }),
         prisma.salarySlip.findMany({ where: { organizationId } }),
         getMedicalStockRowsByOrganization(organizationId),
+        getMedicalStockMovementsByOrganization(organizationId),
       ]);
 
-    const normalizedMedicalStocks: UnifiedStock[] = medicalRows.map((row) => {
-      const item = mapMedicalStockRow(row);
-      return {
+    const groupedMedicalStocks = buildGroupedMedicalStock({
+      stockRows,
+      movementRows,
+    });
+
+    const normalizedMedicalStocks: UnifiedStock[] = groupedMedicalStocks.flatMap((item) =>
+      item.batches.map((batch) => ({
         medicineName: item.medicineName,
-        quantity: Number(item.quantity || 0),
-        expiryDate: new Date(item.expiryDate),
-        purchasePrice: Number(item.purchasePrice || 0),
+        quantity: Number(batch.quantity || 0),
+        expiryDate: new Date(batch.expiryDate),
+        purchasePrice: Number(batch.purchasePrice || 0),
         lowStockThreshold: 10,
         unitType: "UNIT",
-        source: "medical-stock",
-      };
-    });
+        source: "medical-stock" as const,
+      })),
+    );
 
     const normalizedLegacyStocks: UnifiedStock[] = legacyStocks.map((item) => ({
       medicineName: item.medicineName,
@@ -65,7 +70,7 @@ export async function POST(req: Request) {
       purchasePrice: Number(item.costPrice || 0),
       lowStockThreshold: Number(item.lowStockThreshold || 10),
       unitType: item.unitType || "UNIT",
-      source: "legacy-stock",
+      source: "legacy-stock" as const,
     }));
 
     const stocks: UnifiedStock[] =
@@ -228,13 +233,7 @@ Low stock items: ${lowStock.length}
 Expiring soon items: ${expiringSoon.length}
 Inventory source: ${
         normalizedMedicalStocks.length > 0 ? "Medical Stock module" : "Legacy medicine stock"
-      }
-
-${
-  lowStock.length > 0
-    ? "Suggestion: Reorder low stock medicines soon."
-    : "Stock level looks okay."
-}`;
+      }`;
     } else if (
       question.includes("payroll") ||
       question.includes("salary") ||
