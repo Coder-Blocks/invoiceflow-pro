@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import SavedStockGroupedTable from "@/components/medical-stock/SavedStockGroupedTable";
 import type {
-  MedicalStockItem,
+  MedicalStockGroupedItem,
   MedicalStockRowInput,
   UploadMedicalBillResponse,
   SaveMedicalStockResponse,
@@ -90,7 +90,7 @@ function isRowCompletelyEmpty(row: MedicalStockRowInput) {
 
 export default function MedicalStockClient() {
   const [rows, setRows] = useState<MedicalStockRowInput[]>([emptyRow()]);
-  const [stockItems, setStockItems] = useState<MedicalStockItem[]>([]);
+  const [stockItems, setStockItems] = useState<MedicalStockGroupedItem[]>([]);
   const [search, setSearch] = useState("");
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [expiryOnly, setExpiryOnly] = useState(false);
@@ -420,7 +420,7 @@ if (data.extractedRows.length > 0) {
             </div>
 
             <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200">
-              <table className="min-w-[1200px] w-full border-collapse text-sm">
+              <table className="min-w-300 w-full border-collapse text-sm">
                 <thead className="bg-slate-50">
                   <tr className="text-left text-slate-700">
                     <th className="px-3 py-3 font-semibold">Medicine Name</th>

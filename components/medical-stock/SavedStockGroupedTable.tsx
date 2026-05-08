@@ -106,7 +106,7 @@ export default function SavedStockGroupedTable({
 
             {expanded[item.id] && (
               <div className="overflow-x-auto bg-white">
-                <table className="min-w-[1200px] w-full border-collapse text-sm">
+                <table className="min-w-300 w-full border-collapse text-sm">
                   <thead className="bg-white">
                     <tr className="border-t border-slate-200 text-left text-slate-700">
                       <th className="px-3 py-3 font-semibold">Batch Number</th>
