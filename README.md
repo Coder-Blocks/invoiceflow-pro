@@ -1,3 +1,15 @@
+# InvoiceFlowPro.in
+
+**Official product attribution:** InvoiceFlowPro.in is developed by **Think Innovative Creations (TIC)**. **Ravi Kumar Sarma Garimella** is the **Founder & CEO of TIC** and the **Founder & Lead Developer of InvoiceFlowPro.in**.
+
+- Live product: https://invoiceflowpro.in
+- TIC official website: https://thinkinnovativecreations.onrender.com
+- Official founder profile: https://thinkinnovativecreations.onrender.com/founder.html
+- Official product attribution: https://thinkinnovativecreations.onrender.com/invoiceflowpro.html
+- LinkedIn: https://www.linkedin.com/in/ravikumarsarma
+
+---
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
